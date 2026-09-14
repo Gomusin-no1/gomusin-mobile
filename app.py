@@ -28,7 +28,12 @@ class User(db.Model):
  id=db.Column(db.Integer,primary_key=True); username=db.Column(db.String(50),unique=True,nullable=False,index=True)
  password_hash=db.Column(db.String(255),nullable=False); role=db.Column(db.String(20),nullable=False,default='staff')
  display_name=db.Column(db.String(50)); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id')); active=db.Column(db.Boolean,default=True,nullable=False)
+ company_code=db.Column(db.String(50),default='trustflow',nullable=False,index=True); recovery_phone=db.Column(db.String(30))
  created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
+
+class AccountRequest(db.Model):
+ id=db.Column(db.Integer,primary_key=True); request_type=db.Column(db.String(20),nullable=False)
+ company_code=db.Column(db.String(50),nullable=False,index=True); username=db.Column(db.String(50)); display_name=db.Column(db.String(50)); phone=db.Column(db.String(30)); status=db.Column(db.String(20),default='대기',nullable=False); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
 
 class Branch(db.Model):
  id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),unique=True,nullable=False,index=True)
@@ -360,20 +365,21 @@ def seed_masters():
  db.session.commit()
 
 def prepare_database():
- db.create_all(); upgrade_existing_sale(); seed_branches(); seed_masters()
+ db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)'}); upgrade_existing_sale(); seed_branches(); seed_masters()
 
 def sync_admin():
- prepare_database(); u=os.environ.get('ADMIN_USERNAME','').strip(); p=os.environ.get('ADMIN_PASSWORD','')
+ prepare_database(); u=os.environ.get('ADMIN_USERNAME','').strip(); p=os.environ.get('ADMIN_PASSWORD',''); company_code=os.environ.get('COMPANY_LOGIN_ID','trustflow').strip().lower() or 'trustflow'
  if not u or not p:return
  user=User.query.filter_by(username=u).first()
- if not user:db.session.add(User(username=u,password_hash=generate_password_hash(p),role='admin'));db.session.commit();return
+ if not user:db.session.add(User(username=u,password_hash=generate_password_hash(p),role='admin',company_code=company_code));db.session.commit();return
  changed=False
  if not check_password_hash(user.password_hash,p):user.password_hash=generate_password_hash(p);changed=True
  if user.role!='admin':user.role='admin';changed=True
+ if not user.company_code:user.company_code=company_code;changed=True
  if changed:db.session.commit()
 
 @app.context_processor
-def helpers():return dict(current_user=session.get('display_name') or session.get('username'),current_role=session.get('role'),current_branch_id=current_branch_id(),moneyfmt=lambda v:f'{money(v):,}')
+def helpers():return dict(current_user=session.get('display_name') or session.get('username'),current_role=session.get('role'),current_company=session.get('company_code'),current_branch_id=current_branch_id(),moneyfmt=lambda v:f'{money(v):,}')
 
 @app.route('/health')
 def health():
@@ -384,13 +390,44 @@ def login():
  try:sync_admin()
  except Exception as e:return f'DB 연결 오류: {e}',500
  if request.method=='POST':
-  user=User.query.filter_by(username=request.form.get('username','').strip()).first()
+  company_code=request.form.get('company_code','').strip().lower()
+  user=User.query.filter_by(username=request.form.get('username','').strip(),company_code=company_code).first()
   if user and user.active is False:
    flash('비활성화된 직원 계정입니다. 관리자에게 문의해주세요.','error'); return render_template('login.html')
   if user and check_password_hash(user.password_hash,request.form.get('password','')):
-   session.clear();session.update(user_id=user.id,username=user.username,display_name=user.display_name or user.username,role=user.role,branch_id=user.branch_id);return redirect(url_for('dashboard'))
+   session.clear();session.update(user_id=user.id,username=user.username,display_name=user.display_name or user.username,role=user.role,branch_id=user.branch_id,company_code=user.company_code);return redirect(url_for('dashboard'))
   flash('아이디 또는 비밀번호가 올바르지 않습니다.','error')
  return render_template('login.html')
+
+@app.route('/signup',methods=['GET','POST'])
+def signup():
+ prepare_database()
+ if request.method=='POST':
+  company=request.form.get('company_code','').strip().lower(); username=request.form.get('username','').strip(); name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('phone','')); password=request.form.get('password','')
+  if not all([company,username,name,phone,password]): flash('모든 항목을 입력해주세요.','error')
+  elif not User.query.filter_by(company_code=company).first(): flash('등록되지 않은 회사 전체아이디입니다.','error')
+  elif User.query.filter_by(username=username).first(): flash('이미 사용 중인 개인아이디입니다.','error')
+  else:
+   db.session.add(User(username=username,password_hash=generate_password_hash(password),role='staff',display_name=name,company_code=company,recovery_phone=phone,active=False)); db.session.commit(); flash('가입 신청이 완료됐습니다. 회사 관리자의 승인을 기다려주세요.','success'); return redirect(url_for('login'))
+ return render_template('signup.html')
+
+@app.route('/find-id',methods=['GET','POST'])
+def find_id():
+ found=None
+ if request.method=='POST':
+  company=request.form.get('company_code','').strip().lower(); name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('phone',''))
+  user=User.query.filter_by(company_code=company,display_name=name,recovery_phone=phone).first(); found=user.username if user else ''
+ return render_template('find_id.html',found=found)
+
+@app.route('/password-help',methods=['GET','POST'])
+def password_help():
+ if request.method=='POST':
+  company=request.form.get('company_code','').strip().lower(); username=request.form.get('username','').strip(); name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('phone',''))
+  user=User.query.filter_by(company_code=company,username=username,display_name=name,recovery_phone=phone).first()
+  if user: db.session.add(AccountRequest(request_type='비밀번호',company_code=company,username=username,display_name=name,phone=phone)); db.session.commit()
+  flash('입력정보가 일치하면 회사 관리자에게 재설정 요청이 전달됩니다.','success'); return redirect(url_for('login'))
+ return render_template('password_help.html')
+
 @app.route('/logout')
 def logout():session.clear();return redirect(url_for('login'))
 
