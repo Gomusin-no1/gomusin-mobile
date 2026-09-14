@@ -1,4 +1,6 @@
 {% extends 'base.html' %}{% block title %}오늘 업무 · TrustFlow{% endblock %}{% block page_title %}고객약속 · 오늘 업무{% endblock %}{% block top_actions %}<a class="btn primary" href="{{url_for('sale_new')}}">+ 신규개통</a>{% endblock %}{% block content %}
+<section class="dashboard-hero"><div class="hero-copy"><span class="hero-date">{{today.strftime('%Y년 %m월 %d일')}}</span><h2>{{current_user}}님,<br><strong>오늘의 신뢰 흐름</strong>을 시작하세요.</h2><p>고객과의 약속을 놓치지 않도록 중요한 업무부터 정리했습니다.</p></div><div class="hero-focus"><span>오늘의 집중 업무</span><b>{{(tasks|length if selected==today else 0) + overdue|length}}<small>건</small></b><div><em>오늘 약속 {{tasks|length if selected==today else 0}}</em><em class="warn">기한초과 {{overdue|length}}</em></div></div></section>
+<div class="section-label"><span>LIVE WORKSPACE</span><h3>오늘 운영 현황</h3></div>
 <div class="kpi-grid">
 <a class="kpi kpi-link" href="#today-tasks"><span>오늘 약속</span><b>{{tasks|length if selected==today else 0}}</b><small>상세 확인 · 바로 처리</small></a>
 <a class="kpi danger kpi-link" href="#overdue"><span>기한초과</span><b>{{overdue|length}}</b><small>미처리 업무</small></a>
