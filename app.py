@@ -384,6 +384,19 @@ def sync_admin():
 @app.context_processor
 def helpers():return dict(current_user=session.get('display_name') or session.get('username'),current_role=session.get('role'),current_company=session.get('company_code'),current_branch_id=current_branch_id(),moneyfmt=lambda v:f'{money(v):,}')
 
+@app.errorhandler(403)
+def forbidden_error(error):
+ return render_template('error.html',code=403,title='접근 권한이 없습니다',message='현재 계정 또는 소속 회사에서 사용할 수 없는 메뉴입니다.'),403
+
+@app.errorhandler(404)
+def not_found_error(error):
+ return render_template('error.html',code=404,title='페이지를 찾을 수 없습니다',message='주소가 변경됐거나 존재하지 않는 화면입니다.'),404
+
+@app.errorhandler(500)
+def server_error(error):
+ db.session.rollback()
+ return render_template('error.html',code=500,title='잠시 처리할 수 없습니다',message='입력한 내용은 다시 확인할 수 있도록 안전하게 처리하고 있습니다.'),500
+
 @app.route('/health')
 def health():
  try:db.session.execute(text('SELECT 1'));return {'status':'ok','database':'connected'}
