@@ -19,3 +19,5 @@
 .kpi small{display:block;margin-top:5px;color:var(--muted,#6b7280);font-size:12px}
 
 .brand-copy{display:flex;flex-direction:column;line-height:1.08}.brand-copy strong{font-size:18px;letter-spacing:-.2px}.brand-copy small{margin-top:5px;color:#9ca8bb;font-size:9px;font-weight:600;letter-spacing:.15px}.login-brand{margin-bottom:22px}.login-brand h1{font-size:30px;letter-spacing:-.6px}.login-brand p{margin-top:7px;color:var(--muted);font-size:13px;letter-spacing:.15px}
+
+.auth-links{display:flex;justify-content:center;flex-wrap:wrap;gap:8px 16px;margin-top:20px;padding-top:16px;border-top:1px solid var(--line);font-size:13px}.auth-links a{color:var(--primary);font-weight:700}.auth-result{margin-top:18px;padding:14px;border-radius:10px;background:#f1f6ff;text-align:center;color:#26365a}.login-card h2{margin:0 0 18px;font-size:18px}
