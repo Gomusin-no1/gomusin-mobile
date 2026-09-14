@@ -40,7 +40,9 @@ class Branch(db.Model):
  code=db.Column(db.String(30),unique=True); address=db.Column(db.String(255)); phone=db.Column(db.String(30)); manager_name=db.Column(db.String(50))
  active=db.Column(db.Boolean,default=True,nullable=False); memo=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
 class Customer(db.Model):
- id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),nullable=False); phone=db.Column(db.String(30),index=True); device=db.Column(db.String(100)); carrier=db.Column(db.String(30)); status=db.Column(db.String(30),default='상담중',nullable=False); memo=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False); updated_at=db.Column(db.DateTime,default=datetime.utcnow,onupdate=datetime.utcnow,nullable=False)
+ id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),nullable=False); phone=db.Column(db.String(30),index=True); device=db.Column(db.String(100)); carrier=db.Column(db.String(30)); status=db.Column(db.String(30),default='상담중',nullable=False); memo=db.Column(db.Text)
+ address_road=db.Column(db.String(255),index=True); address_jibun=db.Column(db.String(255),index=True); address_detail=db.Column(db.String(255)); address_key=db.Column(db.String(255),index=True)
+ created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False); updated_at=db.Column(db.DateTime,default=datetime.utcnow,onupdate=datetime.utcnow,nullable=False)
 class Booking(db.Model):
  id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),nullable=False); phone=db.Column(db.String(30)); visit_date=db.Column(db.String(50)); device=db.Column(db.String(100)); memo=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
 class Price(db.Model):
@@ -368,7 +370,7 @@ def seed_masters():
  db.session.commit()
 
 def prepare_database():
- db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)'}); upgrade_existing_sale(); seed_branches(); seed_masters()
+ db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)'}); _add_columns('customer',{'address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)'}); upgrade_existing_sale(); seed_branches(); seed_masters()
 
 def sync_admin():
  prepare_database(); u=os.environ.get('ADMIN_USERNAME','').strip(); p=os.environ.get('ADMIN_PASSWORD',''); company_code=os.environ.get('COMPANY_LOGIN_ID','trustflow').strip().lower() or 'trustflow'
@@ -515,7 +517,8 @@ def customers():
  prepare_database(); q=request.args.get('q','').strip(); month=request.args.get('month','').strip(); branch_id=request.args.get('branch_id','').strip()
  if not is_admin(): branch_id=str(current_branch_id() or '')
  query=Customer.query
- if q: query=query.filter(or_(Customer.name.ilike(f'%{q}%'),Customer.phone.ilike(f'%{q}%')))
+ if q:
+  phone_q=normalize_phone(q); query=query.filter(or_(Customer.name.ilike(f'%{q}%'),Customer.phone.ilike(f'%{phone_q or q}%'),Customer.address_road.ilike(f'%{q}%'),Customer.address_jibun.ilike(f'%{q}%'),Customer.address_detail.ilike(f'%{q}%')))
  sale_scope=Sale.query
  if branch_id:
   try:sale_scope=sale_scope.filter(Sale.branch_id==int(branch_id))
@@ -556,7 +559,13 @@ def customer_detail(cid):
  paybacks=Payback.query.filter(Payback.sale_id.in_(sale_ids or [0])).order_by(Payback.due_date.desc()).all()
  doc_counts=dict(db.session.query(SaleDocument.sale_id,db.func.count(SaleDocument.id)).filter(SaleDocument.sale_id.in_(sale_ids or [0])).group_by(SaleDocument.sale_id).all())
  branches={b.id:b for b in Branch.query.all()}
- return render_template('customer_detail.html',customer=c,sales=sale_history,tasks=tasks,open_tasks=open_tasks,paybacks=paybacks,doc_counts=doc_counts,branches=branches)
+ household=[]
+ if c.address_key:
+  hq=Customer.query.filter(Customer.address_key==c.address_key,Customer.id!=c.id)
+  if not is_admin():
+   allowed_phones=[r[0] for r in Sale.query.filter_by(branch_id=current_branch_id()).with_entities(Sale.customer_phone).distinct().all() if r[0]]; hq=hq.filter(Customer.phone.in_(allowed_phones or ['__none__']))
+  household=hq.order_by(Customer.name).all()
+ return render_template('customer_detail.html',customer=c,sales=sale_history,tasks=tasks,open_tasks=open_tasks,paybacks=paybacks,doc_counts=doc_counts,branches=branches,household=household)
 
 @app.route('/customers/new',methods=['GET','POST'])
 @login_required
@@ -564,7 +573,8 @@ def customer_new():
  if request.method=='POST':
   name=request.form.get('name','').strip()
   if not name:flash('고객명을 입력해주세요.','error');return redirect(url_for('customer_new'))
-  db.session.add(Customer(name=name,phone=request.form.get('phone','').strip(),carrier=request.form.get('carrier',''),status=request.form.get('status','상담중'),memo=request.form.get('memo','')));db.session.commit();flash('고객이 등록되었습니다.','success');return redirect(url_for('customers'))
+  road=request.form.get('address_road','').strip(); jibun=request.form.get('address_jibun','').strip(); detail=request.form.get('address_detail','').strip(); key=request.form.get('address_key','').strip() or ('|'.join([road,jibun,detail]).lower().replace(' ',''))
+  db.session.add(Customer(name=name,phone=normalize_phone(request.form.get('phone','')),carrier=request.form.get('carrier',''),status=request.form.get('status','상담중'),memo=request.form.get('memo',''),address_road=road,address_jibun=jibun,address_detail=detail,address_key=key));db.session.commit();flash('고객이 등록되었습니다.','success');return redirect(url_for('customers'))
  return render_template('customer_form.html',customer=None)
 @app.route('/customers/<int:cid>/edit',methods=['GET','POST'])
 @login_required
@@ -573,7 +583,8 @@ def customer_edit(cid):
  if not is_admin():
   if not (c.phone and Sale.query.filter_by(customer_phone=c.phone,branch_id=current_branch_id()).first()): abort(403)
  if request.method=='POST':
-  c.name=request.form.get('name','').strip();c.phone=request.form.get('phone','').strip();c.carrier=request.form.get('carrier','');c.status=request.form.get('status','상담중');c.memo=request.form.get('memo','');db.session.commit();flash('고객정보가 수정되었습니다.','success');return redirect(url_for('customers'))
+  road=request.form.get('address_road','').strip(); jibun=request.form.get('address_jibun','').strip(); detail=request.form.get('address_detail','').strip(); key=request.form.get('address_key','').strip() or ('|'.join([road,jibun,detail]).lower().replace(' ',''))
+  c.name=request.form.get('name','').strip();c.phone=normalize_phone(request.form.get('phone',''));c.carrier=request.form.get('carrier','');c.status=request.form.get('status','상담중');c.memo=request.form.get('memo','');c.address_road=road;c.address_jibun=jibun;c.address_detail=detail;c.address_key=key;db.session.commit();flash('고객정보가 수정되었습니다.','success');return redirect(url_for('customers'))
  return render_template('customer_form.html',customer=c)
 
 @app.post('/customers/<int:cid>/delete')
