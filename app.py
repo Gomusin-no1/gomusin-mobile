@@ -184,6 +184,9 @@ def current_branch_id():
 def is_admin():
  return session.get('role')=='admin'
 
+def enforce_user_company(user):
+ if not user or user.company_code!=(session.get('company_code') or 'trustflow'): abort(403)
+
 def enforce_branch(branch_id):
  if is_admin(): return
  if not current_branch_id() or int(branch_id or 0)!=current_branch_id(): abort(403)
@@ -1143,27 +1146,29 @@ def master_wired_toggle(mid):
 def staff():
  prepare_database()
  if request.method=='POST':
-  u=request.form.get('username','').strip(); pw=request.form.get('password',''); role=request.form.get('role','staff'); display_name=request.form.get('display_name','').strip(); branch_id=request.form.get('branch_id') or None
+  u=request.form.get('username','').strip(); pw=request.form.get('password',''); role=request.form.get('role','staff'); display_name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('recovery_phone','')); branch_id=request.form.get('branch_id') or None; company=session.get('company_code') or 'trustflow'
   if not u or not pw or not display_name:
    flash('직원명, 로그인 아이디, 비밀번호를 모두 입력해주세요.','error')
   elif User.query.filter_by(username=u).first():
    flash('이미 사용 중인 로그인 아이디입니다.','error')
   else:
-   db.session.add(User(username=u,password_hash=generate_password_hash(pw),role=role,display_name=display_name,branch_id=branch_id,active=True)); db.session.commit(); flash('직원이 등록되었습니다.','success')
+   db.session.add(User(username=u,password_hash=generate_password_hash(pw),role=role,display_name=display_name,branch_id=branch_id,company_code=company,recovery_phone=phone,active=True)); db.session.commit(); flash('직원이 등록되었습니다.','success')
   return redirect(url_for('staff'))
- users=User.query.order_by(User.active.desc(),User.display_name,User.username).all()
- return render_template('staff.html',users=users,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all())
+ company=session.get('company_code') or 'trustflow'
+ users=User.query.filter_by(company_code=company).order_by(User.active.desc(),User.display_name,User.username).all()
+ account_requests=AccountRequest.query.filter_by(company_code=company,status='대기').order_by(AccountRequest.id.desc()).all()
+ return render_template('staff.html',users=users,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all(),account_requests=account_requests)
 
 @app.route('/staff/<int:uid>/edit',methods=['GET','POST'])
 @login_required
 @admin_required
 def staff_edit(uid):
- u=User.query.get_or_404(uid)
+ u=User.query.get_or_404(uid); enforce_user_company(u)
  if request.method=='POST':
   display_name=request.form.get('display_name','').strip()
   if not display_name:
    flash('직원명을 입력해주세요.','error'); return redirect(url_for('staff_edit',uid=uid))
-  u.display_name=display_name; u.branch_id=request.form.get('branch_id') or None; u.role=request.form.get('role','staff'); u.active=request.form.get('active')=='1'
+  u.display_name=display_name; u.branch_id=request.form.get('branch_id') or None; u.role=request.form.get('role','staff'); u.recovery_phone=normalize_phone(request.form.get('recovery_phone','')); u.active=request.form.get('active')=='1'
   new_pw=request.form.get('password','')
   if new_pw: u.password_hash=generate_password_hash(new_pw)
   db.session.commit()
@@ -1176,7 +1181,7 @@ def staff_edit(uid):
 @login_required
 @admin_required
 def staff_toggle(uid):
- u=User.query.get_or_404(uid)
+ u=User.query.get_or_404(uid); enforce_user_company(u)
  if session.get('user_id')==u.id and u.active:
   flash('현재 로그인 중인 본인 계정은 비활성화할 수 없습니다.','error'); return redirect(url_for('staff'))
  u.active=not bool(u.active); db.session.commit()
@@ -1186,7 +1191,7 @@ def staff_toggle(uid):
 @login_required
 @admin_required
 def staff_delete(uid):
- u=User.query.get_or_404(uid)
+ u=User.query.get_or_404(uid); enforce_user_company(u)
  if session.get('user_id')==u.id:
   flash('현재 로그인 중인 본인 계정은 삭제할 수 없습니다.','error'); return redirect(url_for('staff'))
  staff_name=u.display_name or u.username
@@ -1196,4 +1201,12 @@ def staff_delete(uid):
  if has_sales or has_tasks or has_wired:
   flash('판매/약속/유선판매 이력이 있는 직원은 완전 삭제할 수 없습니다. 비활성화로 관리해주세요.','error'); return redirect(url_for('staff'))
  db.session.delete(u); db.session.commit(); flash('직원 계정이 삭제되었습니다.','success'); return redirect(url_for('staff'))
+
+@app.post('/account-requests/<int:request_id>/complete')
+@login_required
+@admin_required
+def account_request_complete(request_id):
+ item=AccountRequest.query.get_or_404(request_id)
+ if item.company_code!=(session.get('company_code') or 'trustflow'): abort(403)
+ item.status='완료'; db.session.commit(); flash('비밀번호 재설정 요청을 완료 처리했습니다.','success'); return redirect(url_for('staff'))
 
