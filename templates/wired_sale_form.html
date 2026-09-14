@@ -11,6 +11,7 @@
 
 <section class="panel form-panel"><div class="section-head"><span>02</span><div><h2>인터넷 / TV 상품</h2><p>통신사를 선택하면 현재 사용 중인 유선상품만 표시됩니다.</p></div></div><div class="form-grid">
 <label>통신사<select name="carrier" id="wiredCarrier"><option value="">선택</option>{% for v in ['SK','KT','LG'] %}<option value="{{v}}" {% if item and item.carrier==v %}selected{% endif %}>{{v}}</option>{% endfor %}</select></label>
+<label>판매구분<select name="business_type">{% for v in ['유선판매','렌탈서비스','단독유선'] %}<option value="{{v}}" {% if item and item.business_type==v %}selected{% endif %}>{{v}}</option>{% endfor %}</select></label>
 <label>상품종류<select name="product_type"><option value="인터넷" {% if item and item.product_type=='인터넷' %}selected{% endif %}>인터넷</option><option value="인터넷+TV" {% if item and item.product_type=='인터넷+TV' %}selected{% endif %}>인터넷+TV</option><option value="TV" {% if item and item.product_type=='TV' %}selected{% endif %}>TV</option></select></label>
 <label>인터넷 요금제<select name="internet_plan" id="internetPlan" data-selected="{{item.internet_plan if item else ''}}"><option value="">통신사 선택</option></select></label>
 <label>인터넷 속도<select name="internet_speed" id="internetSpeed"><option value="">선택안함</option>{% for v in ['100M','500M','1G'] %}<option value="{{v}}" {% if item and item.internet_speed==v %}selected{% endif %}>{{v}}</option>{% endfor %}</select></label>

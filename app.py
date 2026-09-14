@@ -1,4 +1,4 @@
-import os, calendar, io
+import os, calendar, io, secrets, json
 from datetime import datetime, date, timedelta
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, flash, abort, jsonify, send_file
@@ -71,6 +71,7 @@ class WiredSale(db.Model):
  branch_id=db.Column(db.Integer,db.ForeignKey('branch.id'),index=True)
  assigned_staff=db.Column(db.String(50),index=True)
  carrier=db.Column(db.String(30),index=True)
+ business_type=db.Column(db.String(30),default='유선판매',nullable=False,index=True)
  product_type=db.Column(db.String(50),index=True)
  internet_plan=db.Column(db.String(120))
  internet_speed=db.Column(db.String(20))
@@ -91,6 +92,40 @@ class WiredSale(db.Model):
  final_margin=db.Column(db.Integer,default=0)
  memo=db.Column(db.Text)
  created_by=db.Column(db.String(50)); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False); updated_at=db.Column(db.DateTime,default=datetime.utcnow,onupdate=datetime.utcnow)
+
+class CashLedger(db.Model):
+ id=db.Column(db.Integer,primary_key=True)
+ ledger_date=db.Column(db.Date,nullable=False,index=True); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id'),nullable=False,index=True)
+ direction=db.Column(db.String(10),nullable=False,index=True)  # 입금 / 출금
+ category=db.Column(db.String(50),nullable=False,index=True); amount=db.Column(db.Integer,default=0,nullable=False)
+ payment_method=db.Column(db.String(30),default='현금',nullable=False); reference_type=db.Column(db.String(30)); reference_id=db.Column(db.Integer)
+ counterparty=db.Column(db.String(100)); memo=db.Column(db.Text); created_by=db.Column(db.String(50)); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False,index=True)
+
+class CardTerminal(db.Model):
+ id=db.Column(db.Integer,primary_key=True); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id'),nullable=False,index=True)
+ provider=db.Column(db.String(50)); merchant_number=db.Column(db.String(100),index=True); terminal_number=db.Column(db.String(100),unique=True,nullable=False,index=True)
+ api_token=db.Column(db.String(120),nullable=False,unique=True,index=True); active=db.Column(db.Boolean,default=True,nullable=False); memo=db.Column(db.Text)
+ created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
+
+class CardTransaction(db.Model):
+ id=db.Column(db.Integer,primary_key=True); terminal_id=db.Column(db.Integer,db.ForeignKey('card_terminal.id'),nullable=False,index=True); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id'),nullable=False,index=True)
+ approval_number=db.Column(db.String(100),nullable=False,index=True); paid_at=db.Column(db.DateTime,nullable=False,index=True); amount=db.Column(db.Integer,default=0,nullable=False)
+ card_company=db.Column(db.String(50)); installment=db.Column(db.String(20)); receipt_number=db.Column(db.String(100)); status=db.Column(db.String(20),default='승인',nullable=False,index=True)
+ raw_data=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
+ __table_args__=(db.UniqueConstraint('terminal_id','approval_number',name='uq_terminal_approval'),)
+
+class ContactLog(db.Model):
+ id=db.Column(db.Integer,primary_key=True); customer_id=db.Column(db.Integer,db.ForeignKey('customer.id'),nullable=False,index=True); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id'),nullable=False,index=True)
+ contacted_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False,index=True); staff_name=db.Column(db.String(50),nullable=False,index=True)
+ channel=db.Column(db.String(30),default='전화'); outcome=db.Column(db.String(30),default='상담완료',index=True); note=db.Column(db.Text,nullable=False); next_contact_date=db.Column(db.Date,index=True)
+ created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
+
+class LegalCase(db.Model):
+ id=db.Column(db.Integer,primary_key=True); customer_id=db.Column(db.Integer,db.ForeignKey('customer.id'),nullable=False,index=True); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id'),nullable=False,index=True)
+ case_type=db.Column(db.String(40),default='환수',nullable=False,index=True); claim_amount=db.Column(db.Integer,default=0,nullable=False); incident_date=db.Column(db.Date)
+ reason=db.Column(db.Text); evidence=db.Column(db.Text); debtor_address=db.Column(db.String(300)); demand_due_date=db.Column(db.Date,index=True)
+ status=db.Column(db.String(30),default='자료수집',nullable=False,index=True); assigned_staff=db.Column(db.String(50)); memo=db.Column(db.Text)
+ created_by=db.Column(db.String(50)); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False,index=True); updated_at=db.Column(db.DateTime,default=datetime.utcnow,onupdate=datetime.utcnow)
 
 
 class PlanMaster(db.Model):
@@ -146,6 +181,10 @@ class InventoryMovement(db.Model):
 def money(v):
  try:return int(float(str(v or 0).replace(',','').replace('원','').strip() or 0))
  except:return 0
+
+def normalize_phone(v):
+ digits=''.join(ch for ch in str(v or '') if ch.isdigit())
+ return digits[:11]
 
 def parse_date(v):
  try:return datetime.strptime((v or '').strip(),'%Y-%m-%d').date() if v else None
@@ -370,7 +409,7 @@ def seed_masters():
  db.session.commit()
 
 def prepare_database():
- db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)'}); _add_columns('customer',{'address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)'}); upgrade_existing_sale(); seed_branches(); seed_masters()
+ db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)'}); _add_columns('customer',{'address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale(); seed_branches(); seed_masters()
 
 def sync_admin():
  prepare_database(); u=os.environ.get('ADMIN_USERNAME','').strip(); p=os.environ.get('ADMIN_PASSWORD',''); company_code=os.environ.get('COMPANY_LOGIN_ID','trustflow').strip().lower() or 'trustflow'
@@ -448,6 +487,151 @@ def password_help():
 
 @app.route('/logout')
 def logout():session.clear();return redirect(url_for('login'))
+
+def scoped_branch_from_request():
+ if not is_admin(): return current_branch_id()
+ try:return int(request.values.get('branch_id')) if request.values.get('branch_id') else None
+ except:return None
+
+@app.route('/cash-ledger',methods=['GET','POST'])
+@login_required
+def cash_ledger():
+ prepare_database(); branch_id=scoped_branch_from_request(); month=request.values.get('month') or date.today().strftime('%Y-%m')
+ try:y,m=map(int,month.split('-')); start=date(y,m,1); end=add_months(start,1)
+ except:y,m=date.today().year,date.today().month; start=date(y,m,1); end=add_months(start,1); month=start.strftime('%Y-%m')
+ if request.method=='POST':
+  bid=current_branch_id() if not is_admin() else (request.form.get('branch_id') or None)
+  if not bid: flash('지점을 선택해주세요.','error'); return redirect(url_for('cash_ledger',month=month))
+  direction=request.form.get('direction','입금'); amount=abs(money(request.form.get('amount')))
+  if amount<=0: flash('금액을 입력해주세요.','error'); return redirect(url_for('cash_ledger',month=month,branch_id=bid))
+  db.session.add(CashLedger(ledger_date=parse_date(request.form.get('ledger_date')) or date.today(),branch_id=int(bid),direction=direction,category=request.form.get('category','기타'),amount=amount,payment_method=request.form.get('payment_method','현금'),counterparty=request.form.get('counterparty'),memo=request.form.get('memo'),created_by=session.get('display_name') or session.get('username')))
+  db.session.commit(); flash('시재 내역이 등록되었습니다.','success'); return redirect(url_for('cash_ledger',month=month,branch_id=bid))
+ q=CashLedger.query.filter(CashLedger.ledger_date>=start,CashLedger.ledger_date<end)
+ if branch_id:q=q.filter_by(branch_id=branch_id)
+ elif not is_admin():q=q.filter(CashLedger.id==-1)
+ items=q.order_by(CashLedger.ledger_date.desc(),CashLedger.id.desc()).all(); branch_map={b.id:b for b in Branch.query.all()}
+ cash_in=sum(x.amount for x in items if x.direction=='입금' and x.payment_method=='현금'); cash_out=sum(x.amount for x in items if x.direction=='출금' and x.payment_method=='현금'); card_total=sum(x.amount for x in items if x.direction=='입금' and x.payment_method=='카드')-sum(x.amount for x in items if x.direction=='출금' and x.payment_method=='카드')
+ return render_template('cash_ledger.html',items=items,month=month,branch_id=branch_id,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all(),branch_map=branch_map,cash_in=cash_in,cash_out=cash_out,cash_balance=cash_in-cash_out,card_total=card_total,today=date.today().isoformat())
+
+@app.get('/cash-ledger/export')
+@login_required
+def cash_ledger_export():
+ from openpyxl import Workbook
+ from openpyxl.styles import Font,PatternFill,Alignment
+ month=request.args.get('month') or date.today().strftime('%Y-%m'); branch_id=scoped_branch_from_request()
+ try:y,m=map(int,month.split('-')); start=date(y,m,1); end=add_months(start,1)
+ except:abort(400)
+ q=CashLedger.query.filter(CashLedger.ledger_date>=start,CashLedger.ledger_date<end)
+ if branch_id:q=q.filter_by(branch_id=branch_id)
+ elif not is_admin():q=q.filter(CashLedger.id==-1)
+ items=q.order_by(CashLedger.ledger_date,CashLedger.id).all(); branches={b.id:b.name for b in Branch.query.all()}
+ wb=Workbook(); ws=wb.active; ws.title=f'{month} 시재'; headers=['날짜','지점','구분','항목','결제수단','입금','출금','거래처/고객','메모','등록자']
+ ws.append(headers)
+ for cell in ws[1]:cell.font=Font(bold=True,color='FFFFFF');cell.fill=PatternFill('solid',fgColor='14324A');cell.alignment=Alignment(horizontal='center')
+ balance=0
+ for x in items:
+  signed=x.amount if x.direction=='입금' else -x.amount; balance+=signed if x.payment_method=='현금' else 0
+  ws.append([x.ledger_date,branches.get(x.branch_id,'-'),x.direction,x.category,x.payment_method,x.amount if x.direction=='입금' else 0,x.amount if x.direction=='출금' else 0,x.counterparty or '',x.memo or '',x.created_by or ''])
+ ws.append(['월 현금잔액','','','','',sum(x.amount for x in items if x.direction=='입금' and x.payment_method=='현금'),sum(x.amount for x in items if x.direction=='출금' and x.payment_method=='현금'),'','',''])
+ for col,w in zip('ABCDEFGHIJ',[13,16,10,18,12,14,14,18,35,14]):ws.column_dimensions[col].width=w
+ out=io.BytesIO();wb.save(out);out.seek(0)
+ return send_file(out,as_attachment=True,download_name=f'TrustFlow_{month}_시재관리.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+@app.post('/cash-ledger/<int:ledger_id>/delete')
+@login_required
+def cash_ledger_delete(ledger_id):
+ x=CashLedger.query.get_or_404(ledger_id); enforce_branch(x.branch_id)
+ if x.reference_type=='card': flash('카드 자동매출은 카드매출 메뉴에서 취소 처리해주세요.','error')
+ else: db.session.delete(x);db.session.commit();flash('시재 내역을 삭제했습니다.','success')
+ return redirect(request.referrer or url_for('cash_ledger'))
+
+@app.route('/card-sales',methods=['GET','POST'])
+@login_required
+def card_sales():
+ prepare_database(); branch_id=scoped_branch_from_request()
+ if request.method=='POST':
+  if not is_admin():abort(403)
+  bid=request.form.get('branch_id'); terminal=request.form.get('terminal_number','').strip()
+  if not bid or not terminal:flash('지점과 카드단말기 등록번호를 입력해주세요.','error')
+  elif CardTerminal.query.filter_by(terminal_number=terminal).first():flash('이미 등록된 단말기 번호입니다.','error')
+  else:
+   token=secrets.token_urlsafe(32);db.session.add(CardTerminal(branch_id=int(bid),provider=request.form.get('provider'),merchant_number=request.form.get('merchant_number'),terminal_number=terminal,api_token=token,memo=request.form.get('memo')));db.session.commit();flash(f'단말기 등록 완료 · 연동키: {token} (VAN사에 1회 전달)','success')
+  return redirect(url_for('card_sales',branch_id=bid or ''))
+ tq=CardTerminal.query
+ txq=CardTransaction.query
+ if branch_id:tq=tq.filter_by(branch_id=branch_id);txq=txq.filter_by(branch_id=branch_id)
+ elif not is_admin():tq=tq.filter(CardTerminal.id==-1);txq=txq.filter(CardTransaction.id==-1)
+ terminals=tq.order_by(CardTerminal.id.desc()).all(); transactions=txq.order_by(CardTransaction.paid_at.desc()).limit(300).all()
+ return render_template('card_sales.html',terminals=terminals,transactions=transactions,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all(),branch_id=branch_id,branch_map={b.id:b for b in Branch.query.all()},terminal_map={t.id:t for t in terminals},today_total=sum(x.amount for x in transactions if x.status=='승인' and x.paid_at.date()==date.today()))
+
+@app.post('/api/card-sales/<terminal_number>')
+def card_sales_webhook(terminal_number):
+ terminal=CardTerminal.query.filter_by(terminal_number=terminal_number,active=True).first_or_404(); token=request.headers.get('X-TrustFlow-Key') or request.args.get('token')
+ if not secrets.compare_digest(token or '',terminal.api_token):abort(403)
+ data=request.get_json(silent=True) or {}; approval=str(data.get('approval_number') or '').strip(); amount=abs(money(data.get('amount'))); status=str(data.get('status') or '승인')
+ if not approval or amount<=0:return jsonify({'ok':False,'error':'approval_number and amount required'}),400
+ existing=CardTransaction.query.filter_by(terminal_id=terminal.id,approval_number=approval).first()
+ if existing:
+  if existing.status==status:return jsonify({'ok':True,'duplicate':True})
+  if status in ['취소','승인취소'] and existing.status=='승인':
+   existing.status='취소';db.session.add(CashLedger(ledger_date=datetime.utcnow().date(),branch_id=terminal.branch_id,direction='출금',category='카드취소',amount=existing.amount,payment_method='카드',reference_type='card',reference_id=existing.id,counterparty=data.get('customer_name'),memo=f'승인취소 {approval}',created_by='카드단말기 자동수집'));db.session.commit();return jsonify({'ok':True,'cancelled':True,'transaction_id':existing.id})
+  return jsonify({'ok':True,'duplicate':True})
+ try:paid_at=datetime.fromisoformat(str(data.get('paid_at')).replace('Z','+00:00')).replace(tzinfo=None) if data.get('paid_at') else datetime.utcnow()
+ except:paid_at=datetime.utcnow()
+ tx=CardTransaction(terminal_id=terminal.id,branch_id=terminal.branch_id,approval_number=approval,paid_at=paid_at,amount=amount,card_company=data.get('card_company'),installment=str(data.get('installment') or ''),receipt_number=data.get('receipt_number'),status=status,raw_data=json.dumps(data,ensure_ascii=False))
+ db.session.add(tx);db.session.flush();db.session.add(CashLedger(ledger_date=paid_at.date(),branch_id=terminal.branch_id,direction='입금' if status=='승인' else '출금',category='카드매출' if status=='승인' else '카드취소',amount=amount,payment_method='카드',reference_type='card',reference_id=tx.id,counterparty=data.get('customer_name'),memo=f'승인번호 {approval}',created_by='카드단말기 자동수집'));db.session.commit()
+ return jsonify({'ok':True,'transaction_id':tx.id})
+
+@app.route('/ob-management')
+@login_required
+def ob_management():
+ cutoff=date.today()-timedelta(days=548); sq=apply_branch_scope(Sale.query,Sale).filter(Sale.opening_date<=cutoff).order_by(Sale.opening_date.asc()).all(); latest={}
+ for s in sq:
+  key=normalize_phone(s.customer_phone)
+  if key and (key not in latest or s.opening_date>latest[key].opening_date):latest[key]=s
+ customers={normalize_phone(c.phone):c for c in Customer.query.filter(Customer.phone.in_(list(latest.keys()) or ['__none__'])).all()}; logs=ContactLog.query
+ if not is_admin():logs=logs.filter_by(branch_id=current_branch_id())
+ last_logs={}
+ for x in logs.order_by(ContactLog.contacted_at.desc()).all():last_logs.setdefault(x.customer_id,x)
+ return render_template('ob_management.html',rows=[(customers.get(p),s) for p,s in latest.items() if customers.get(p)],last_logs=last_logs,cutoff=cutoff,branches={b.id:b for b in Branch.query.all()})
+
+@app.post('/customers/<int:cid>/contact-log')
+@login_required
+def contact_log_add(cid):
+ c=Customer.query.get_or_404(cid); sale=Sale.query.filter_by(customer_phone=c.phone).order_by(Sale.opening_date.desc()).first(); bid=current_branch_id() if not is_admin() else (request.form.get('branch_id') or (sale.branch_id if sale else None))
+ if not bid:flash('담당 지점을 확인할 수 없습니다.','error');return redirect(url_for('customer_detail',cid=cid))
+ enforce_branch(bid); note=request.form.get('note','').strip()
+ if not note:flash('통화내용을 입력해주세요.','error');return redirect(url_for('customer_detail',cid=cid))
+ db.session.add(ContactLog(customer_id=cid,branch_id=int(bid),staff_name=session.get('display_name') or session.get('username'),channel=request.form.get('channel','전화'),outcome=request.form.get('outcome','상담완료'),note=note,next_contact_date=parse_date(request.form.get('next_contact_date'))));db.session.commit();flash('상담 기록을 저장했습니다.','success');return redirect(url_for('customer_detail',cid=cid))
+
+@app.route('/legal-cases',methods=['GET','POST'])
+@login_required
+def legal_cases():
+ prepare_database(); branch_id=scoped_branch_from_request()
+ if request.method=='POST':
+  bid=current_branch_id() if not is_admin() else request.form.get('branch_id'); cid=request.form.get('customer_id')
+  if not bid or not cid:flash('고객과 담당지점을 선택해주세요.','error')
+  else:
+   db.session.add(LegalCase(customer_id=int(cid),branch_id=int(bid),case_type=request.form.get('case_type','환수'),claim_amount=money(request.form.get('claim_amount')),incident_date=parse_date(request.form.get('incident_date')),reason=request.form.get('reason'),evidence=request.form.get('evidence'),debtor_address=request.form.get('debtor_address'),demand_due_date=parse_date(request.form.get('demand_due_date')),status='자료수집',assigned_staff=request.form.get('assigned_staff') or session.get('display_name'),created_by=session.get('display_name') or session.get('username')));db.session.commit();flash('환수 법률업무가 등록되었습니다.','success')
+  return redirect(url_for('legal_cases',branch_id=bid or ''))
+ q=LegalCase.query
+ if branch_id:q=q.filter_by(branch_id=branch_id)
+ elif not is_admin():q=q.filter(LegalCase.id==-1)
+ items=q.order_by(LegalCase.created_at.desc()).all(); customer_map={c.id:c for c in Customer.query.filter(Customer.id.in_([x.customer_id for x in items] or [0])).all()}
+ allowed_sales=apply_branch_scope(Sale.query,Sale).order_by(Sale.customer_name).all(); phones=list(dict.fromkeys([s.customer_phone for s in allowed_sales if s.customer_phone])); customers=Customer.query.filter(Customer.phone.in_(phones or ['__none__'])).order_by(Customer.name).all()
+ return render_template('legal_cases.html',items=items,customer_map=customer_map,customers=customers,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all(),branch_map={b.id:b for b in Branch.query.all()},branch_id=branch_id,today=date.today().isoformat())
+
+@app.post('/legal-cases/<int:case_id>/status')
+@login_required
+def legal_case_status(case_id):
+ x=LegalCase.query.get_or_404(case_id);enforce_branch(x.branch_id);x.status=request.form.get('status',x.status);x.memo=request.form.get('memo',x.memo);db.session.commit();flash('법률업무 상태를 변경했습니다.','success');return redirect(url_for('legal_cases'))
+
+@app.get('/legal-cases/<int:case_id>/notice')
+@login_required
+def legal_case_notice(case_id):
+ x=LegalCase.query.get_or_404(case_id);enforce_branch(x.branch_id);c=Customer.query.get_or_404(x.customer_id);b=Branch.query.get(x.branch_id)
+ text_body=f'''내용증명\n\n수신인: {c.name}\n주소: {x.debtor_address or c.address_road or c.address_jibun or '[주소 확인 필요]'}\n발신인: {b.name if b else 'TrustFlow 등록 사업자'}\n\n제목: {x.case_type} 관련 금원 지급 요청\n\n1. 발생일: {x.incident_date or '[확인 필요]'}\n2. 청구금액: {x.claim_amount:,}원\n3. 청구사유: {x.reason or '[구체적 사실관계 입력 필요]'}\n4. 보유 증빙: {x.evidence or '[계약서·입금내역·대화내역 등 확인 필요]'}\n5. 지급기한: {x.demand_due_date or '[기한 입력 필요]'}\n\n위 기한까지 지급 또는 협의가 없을 경우 지급명령·소액사건심판 등 적법한 절차를 검토할 수 있음을 알려드립니다.\n\n작성일: {date.today()}\n발신인: ____________________\n\n※ 본 문서는 내부 업무용 초안입니다. 발송 전 사실관계·계약·개인정보·관할법원을 확인하고 필요한 경우 변호사 또는 법률구조기관의 검토를 받으세요.'''
+ out=io.BytesIO(text_body.encode('utf-8-sig'));return send_file(out,as_attachment=True,download_name=f'{c.name}_내용증명_초안.txt',mimetype='text/plain; charset=utf-8')
 
 @app.route('/')
 @login_required
@@ -565,7 +749,10 @@ def customer_detail(cid):
   if not is_admin():
    allowed_phones=[r[0] for r in Sale.query.filter_by(branch_id=current_branch_id()).with_entities(Sale.customer_phone).distinct().all() if r[0]]; hq=hq.filter(Customer.phone.in_(allowed_phones or ['__none__']))
   household=hq.order_by(Customer.name).all()
- return render_template('customer_detail.html',customer=c,sales=sale_history,tasks=tasks,open_tasks=open_tasks,paybacks=paybacks,doc_counts=doc_counts,branches=branches,household=household)
+ contact_q=ContactLog.query.filter_by(customer_id=c.id)
+ if not is_admin():contact_q=contact_q.filter_by(branch_id=current_branch_id())
+ contact_logs=contact_q.order_by(ContactLog.contacted_at.desc()).limit(100).all()
+ return render_template('customer_detail.html',customer=c,sales=sale_history,tasks=tasks,open_tasks=open_tasks,paybacks=paybacks,doc_counts=doc_counts,branches=branches,household=household,contact_logs=contact_logs)
 
 @app.route('/customers/new',methods=['GET','POST'])
 @login_required
@@ -1062,6 +1249,7 @@ def wired_sale_new():
    branch_id=(current_branch_id() if not is_admin() else (request.form.get('branch_id') or None)),
    assigned_staff=request.form.get('assigned_staff') or session.get('display_name') or session.get('username'),
    carrier=request.form.get('carrier'),
+   business_type=request.form.get('business_type','유선판매'),
    product_type=request.form.get('product_type'),
    internet_plan=request.form.get('internet_plan'),
    internet_speed=request.form.get('internet_speed'),
@@ -1099,6 +1287,7 @@ def wired_sale_edit(wid):
   item.branch_id=request.form.get('branch_id') or None
   item.assigned_staff=request.form.get('assigned_staff')
   item.carrier=request.form.get('carrier')
+  item.business_type=request.form.get('business_type','유선판매')
   item.product_type=request.form.get('product_type')
   item.internet_plan=request.form.get('internet_plan')
   item.internet_speed=request.form.get('internet_speed')
@@ -1233,4 +1422,3 @@ def account_request_complete(request_id):
  item=AccountRequest.query.get_or_404(request_id)
  if item.company_code!=(session.get('company_code') or 'trustflow'): abort(403)
  item.status='완료'; db.session.commit(); flash('비밀번호 재설정 요청을 완료 처리했습니다.','success'); return redirect(url_for('staff'))
-
