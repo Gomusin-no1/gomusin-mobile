@@ -29,6 +29,7 @@ class User(db.Model):
  password_hash=db.Column(db.String(255),nullable=False); role=db.Column(db.String(20),nullable=False,default='staff')
  display_name=db.Column(db.String(50)); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id')); active=db.Column(db.Boolean,default=True,nullable=False)
  company_code=db.Column(db.String(50),default='trustflow',nullable=False,index=True); recovery_phone=db.Column(db.String(30))
+ can_approve_payback=db.Column(db.Boolean,default=False,nullable=False,index=True)
  created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
 
 class AccountRequest(db.Model):
@@ -60,7 +61,11 @@ class SaleAddon(db.Model):
 class CustomerTask(db.Model):
  id=db.Column(db.Integer,primary_key=True); customer_id=db.Column(db.Integer,db.ForeignKey('customer.id')); sale_id=db.Column(db.Integer,db.ForeignKey('sale.id')); task_type=db.Column(db.String(50),nullable=False,index=True); title=db.Column(db.String(150),nullable=False); description=db.Column(db.Text); due_date=db.Column(db.Date,nullable=False,index=True); assigned_staff=db.Column(db.String(50)); status=db.Column(db.String(30),default='처리예정',nullable=False,index=True); auto_created=db.Column(db.Boolean,default=False,nullable=False); completed_at=db.Column(db.DateTime); completed_by=db.Column(db.String(50)); result_memo=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
 class Payback(db.Model):
- id=db.Column(db.Integer,primary_key=True); sale_id=db.Column(db.Integer,db.ForeignKey('sale.id'),nullable=False,index=True); customer_id=db.Column(db.Integer,db.ForeignKey('customer.id')); amount=db.Column(db.Integer,default=0,nullable=False); due_date=db.Column(db.Date,index=True); status=db.Column(db.String(30),default='처리예정',nullable=False,index=True); collection_source=db.Column(db.String(100)); bank=db.Column(db.String(50)); account_number=db.Column(db.String(100)); account_holder=db.Column(db.String(100)); memo=db.Column(db.Text); processed_at=db.Column(db.DateTime); processed_by=db.Column(db.String(50)); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
+ id=db.Column(db.Integer,primary_key=True); sale_id=db.Column(db.Integer,db.ForeignKey('sale.id'),nullable=False,index=True); customer_id=db.Column(db.Integer,db.ForeignKey('customer.id')); amount=db.Column(db.Integer,default=0,nullable=False); due_date=db.Column(db.Date,index=True); status=db.Column(db.String(30),default='처리예정',nullable=False,index=True); collection_source=db.Column(db.String(100)); bank=db.Column(db.String(50)); account_number=db.Column(db.String(100)); account_holder=db.Column(db.String(100)); memo=db.Column(db.Text); approval_status=db.Column(db.String(20),default='승인대기',nullable=False,index=True); approved_at=db.Column(db.DateTime); approved_by=db.Column(db.String(50)); rejection_reason=db.Column(db.Text); processed_at=db.Column(db.DateTime); processed_by=db.Column(db.String(50)); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
+
+class AuditLog(db.Model):
+ id=db.Column(db.Integer,primary_key=True); company_code=db.Column(db.String(50),nullable=False,index=True); branch_id=db.Column(db.Integer,index=True); user_id=db.Column(db.Integer,index=True); username=db.Column(db.String(50),index=True)
+ action=db.Column(db.String(50),nullable=False,index=True); target_type=db.Column(db.String(50),index=True); target_id=db.Column(db.String(100)); detail=db.Column(db.Text); ip_address=db.Column(db.String(80)); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False,index=True)
 
 class WiredSale(db.Model):
  id=db.Column(db.Integer,primary_key=True)
@@ -256,6 +261,17 @@ def payback_query_scoped():
   q=q.filter(Sale.branch_id==bid) if bid else q.filter(Payback.id==-1)
  return q
 
+def can_approve_payback():
+ if is_admin():return True
+ try:return bool(User.query.get(session.get('user_id')).can_approve_payback)
+ except:return False
+
+def audit(action,target_type='',target_id='',detail='',branch_id=None,commit=False):
+ try:
+  db.session.add(AuditLog(company_code=session.get('company_code') or 'trustflow',branch_id=branch_id or current_branch_id(),user_id=session.get('user_id'),username=session.get('display_name') or session.get('username') or 'system',action=action,target_type=target_type,target_id=str(target_id or ''),detail=str(detail or '')[:2000],ip_address=(request.headers.get('X-Forwarded-For','').split(',')[0].strip() or request.remote_addr)))
+  if commit:db.session.commit()
+ except:db.session.rollback()
+
 def login_required(fn):
  @wraps(fn)
  def wrapped(*a,**kw):
@@ -409,7 +425,7 @@ def seed_masters():
  db.session.commit()
 
 def prepare_database():
- db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)'}); _add_columns('customer',{'address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale(); seed_branches(); seed_masters()
+ db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('customer',{'address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale(); seed_branches(); seed_masters()
 
 def sync_admin():
  prepare_database(); u=os.environ.get('ADMIN_USERNAME','').strip(); p=os.environ.get('ADMIN_PASSWORD',''); company_code=os.environ.get('COMPANY_LOGIN_ID','trustflow').strip().lower() or 'trustflow'
@@ -423,7 +439,7 @@ def sync_admin():
  if changed:db.session.commit()
 
 @app.context_processor
-def helpers():return dict(current_user=session.get('display_name') or session.get('username'),current_role=session.get('role'),current_company=session.get('company_code'),current_branch_id=current_branch_id(),moneyfmt=lambda v:f'{money(v):,}')
+def helpers():return dict(current_user=session.get('display_name') or session.get('username'),current_role=session.get('role'),current_company=session.get('company_code'),current_branch_id=current_branch_id(),can_approve_payback=can_approve_payback(),moneyfmt=lambda v:f'{money(v):,}')
 
 @app.errorhandler(403)
 def forbidden_error(error):
@@ -534,7 +550,7 @@ def cash_ledger_export():
   ws.append([x.ledger_date,branches.get(x.branch_id,'-'),x.direction,x.category,x.payment_method,x.amount if x.direction=='입금' else 0,x.amount if x.direction=='출금' else 0,x.counterparty or '',x.memo or '',x.created_by or ''])
  ws.append(['월 현금잔액','','','','',sum(x.amount for x in items if x.direction=='입금' and x.payment_method=='현금'),sum(x.amount for x in items if x.direction=='출금' and x.payment_method=='현금'),'','',''])
  for col,w in zip('ABCDEFGHIJ',[13,16,10,18,12,14,14,18,35,14]):ws.column_dimensions[col].width=w
- out=io.BytesIO();wb.save(out);out.seek(0)
+ audit('시재 엑셀 다운로드','cash_ledger',month,f'지점 {branch_id or "전체"} · {len(items)}건');db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
  return send_file(out,as_attachment=True,download_name=f'TrustFlow_{month}_시재관리.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 @app.post('/cash-ledger/<int:ledger_id>/delete')
@@ -631,7 +647,7 @@ def legal_case_status(case_id):
 def legal_case_notice(case_id):
  x=LegalCase.query.get_or_404(case_id);enforce_branch(x.branch_id);c=Customer.query.get_or_404(x.customer_id);b=Branch.query.get(x.branch_id)
  text_body=f'''내용증명\n\n수신인: {c.name}\n주소: {x.debtor_address or c.address_road or c.address_jibun or '[주소 확인 필요]'}\n발신인: {b.name if b else 'TrustFlow 등록 사업자'}\n\n제목: {x.case_type} 관련 금원 지급 요청\n\n1. 발생일: {x.incident_date or '[확인 필요]'}\n2. 청구금액: {x.claim_amount:,}원\n3. 청구사유: {x.reason or '[구체적 사실관계 입력 필요]'}\n4. 보유 증빙: {x.evidence or '[계약서·입금내역·대화내역 등 확인 필요]'}\n5. 지급기한: {x.demand_due_date or '[기한 입력 필요]'}\n\n위 기한까지 지급 또는 협의가 없을 경우 지급명령·소액사건심판 등 적법한 절차를 검토할 수 있음을 알려드립니다.\n\n작성일: {date.today()}\n발신인: ____________________\n\n※ 본 문서는 내부 업무용 초안입니다. 발송 전 사실관계·계약·개인정보·관할법원을 확인하고 필요한 경우 변호사 또는 법률구조기관의 검토를 받으세요.'''
- out=io.BytesIO(text_body.encode('utf-8-sig'));return send_file(out,as_attachment=True,download_name=f'{c.name}_내용증명_초안.txt',mimetype='text/plain; charset=utf-8')
+ audit('법률서식 다운로드','legal_case',x.id,f'{c.name} · {x.case_type}',x.branch_id);db.session.commit();out=io.BytesIO(text_body.encode('utf-8-sig'));return send_file(out,as_attachment=True,download_name=f'{c.name}_내용증명_초안.txt',mimetype='text/plain; charset=utf-8')
 
 @app.route('/')
 @login_required
@@ -1123,6 +1139,7 @@ def sale_documents(sid):
 @login_required
 def document_view(did):
  d=SaleDocument.query.get_or_404(did); sale=Sale.query.get_or_404(d.sale_id); enforce_branch(sale.branch_id)
+ audit('고객서류 열람','sale_document',d.id,f'{sale.customer_name} · {d.doc_type} · {d.original_name}',sale.branch_id);db.session.commit()
  return send_file(io.BytesIO(d.file_data),mimetype=d.content_type,download_name=d.original_name,as_attachment=False)
 
 @app.post('/documents/<int:did>/delete')
@@ -1163,7 +1180,7 @@ def paybacks():
  items=query.order_by(Payback.due_date.asc(),Payback.id.desc()).all()
  sales_map={s.id:s for s in Sale.query.filter(Sale.id.in_([p.sale_id for p in items] or [0])).all()}
  allq=payback_query_scoped()
- stats={'today':allq.filter(Payback.due_date==today,Payback.status!='완료').count(),'overdue':payback_query_scoped().filter(Payback.due_date<today,Payback.status!='완료').count(),'pending':payback_query_scoped().filter(Payback.status!='완료').count()}
+ stats={'today':allq.filter(Payback.due_date==today,Payback.status!='완료').count(),'overdue':payback_query_scoped().filter(Payback.due_date<today,Payback.status!='완료').count(),'pending':payback_query_scoped().filter(Payback.status!='완료').count(),'approval':payback_query_scoped().filter(Payback.approval_status=='승인대기',Payback.status!='완료').count()}
  return render_template('paybacks.html',items=items,sales_map=sales_map,status=status,due=due,branch_id=branch_id,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all(),stats=stats)
 
 @app.route('/paybacks/<int:pid>/edit',methods=['GET','POST'])
@@ -1172,9 +1189,12 @@ def payback_edit(pid):
  p=Payback.query.get_or_404(pid); s=Sale.query.get(p.sale_id)
  if s: enforce_branch(s.branch_id)
  if request.method=='POST':
+  old_sensitive=(p.amount,p.bank,p.account_number,p.account_holder)
   p.amount=money(request.form.get('amount')); p.due_date=parse_date(request.form.get('due_date')); p.status=request.form.get('status','처리예정')
   p.bank=request.form.get('bank'); p.account_number=request.form.get('account_number'); p.account_holder=request.form.get('account_holder'); p.memo=request.form.get('memo')
+  if old_sensitive!=(p.amount,p.bank,p.account_number,p.account_holder):p.approval_status='승인대기';p.approved_at=None;p.approved_by=None;p.rejection_reason=None
   if p.status=='완료':
+   if p.approval_status!='승인':flash('승인되지 않은 페이백은 지급완료 처리할 수 없습니다.','error');return redirect(url_for('payback_edit',pid=pid))
    if not p.processed_at: p.processed_at=datetime.utcnow()
    p.processed_by=session.get('display_name') or session.get('username')
   else:
@@ -1199,10 +1219,48 @@ def payback_edit(pid):
 @app.post('/paybacks/<int:pid>/complete')
 @login_required
 def payback_complete(pid):
- p=Payback.query.get_or_404(pid); enforce_branch(Sale.query.get_or_404(p.sale_id).branch_id); p.status='완료'; p.processed_at=datetime.utcnow(); p.processed_by=session.get('display_name') or session.get('username')
+ p=Payback.query.get_or_404(pid); s=Sale.query.get_or_404(p.sale_id); enforce_branch(s.branch_id)
+ if p.approval_status!='승인':flash('지정 승인권자의 승인이 필요합니다.','error');return redirect(url_for('paybacks'))
+ p.status='완료'; p.processed_at=datetime.utcnow(); p.processed_by=session.get('display_name') or session.get('username')
  task=CustomerTask.query.filter_by(sale_id=p.sale_id,task_type='페이백 지급',auto_created=True).order_by(CustomerTask.id.desc()).first()
  if task: task.status='완료'; task.completed_at=p.processed_at; task.completed_by=p.processed_by
- db.session.commit(); flash('페이백을 완료 처리했습니다.','success'); return redirect(url_for('paybacks'))
+ audit('페이백 지급완료','payback',p.id,f'{p.amount}원 · {p.bank} · {p.account_number}',s.branch_id);db.session.commit(); flash('페이백을 완료 처리했습니다.','success'); return redirect(url_for('paybacks'))
+
+@app.post('/paybacks/<int:pid>/approval')
+@login_required
+def payback_approval(pid):
+ if not can_approve_payback():abort(403)
+ p=Payback.query.get_or_404(pid);s=Sale.query.get_or_404(p.sale_id);enforce_branch(s.branch_id);decision=request.form.get('decision')
+ if decision=='approve':p.approval_status='승인';p.approved_at=datetime.utcnow();p.approved_by=session.get('display_name') or session.get('username');p.rejection_reason=None;msg='페이백 지급을 승인했습니다.'
+ elif decision=='reject':p.approval_status='반려';p.approved_at=None;p.approved_by=session.get('display_name') or session.get('username');p.rejection_reason=request.form.get('reason','').strip() or '정보 재확인 필요';msg='페이백 지급을 반려했습니다.'
+ else:abort(400)
+ audit('페이백 '+p.approval_status,'payback',p.id,f'{p.amount}원 · {p.rejection_reason or ""}',s.branch_id);db.session.commit();flash(msg,'success');return redirect(request.referrer or url_for('paybacks'))
+
+@app.post('/paybacks/bulk-transfer.xlsx')
+@login_required
+def payback_bulk_transfer():
+ from openpyxl import Workbook
+ from openpyxl.styles import Font,PatternFill,Alignment
+ ids=[]
+ for v in request.form.getlist('payback_ids'):
+  try:ids.append(int(v))
+  except:pass
+ items=payback_query_scoped().filter(Payback.id.in_(ids or [0]),Payback.approval_status=='승인',Payback.status!='완료').order_by(Payback.id).all()
+ if not items:flash('승인된 미지급 페이백을 선택해주세요.','error');return redirect(url_for('paybacks'))
+ sales={s.id:s for s in Sale.query.filter(Sale.id.in_([p.sale_id for p in items])).all()};month=date.today().strftime('%m월');wb=Workbook();ws=wb.active;ws.title='공통 대량이체';headers=['고객명','은행명','계좌번호','금액','받는통장 표시','보내는통장 표시','검증상태']
+ ws.append(headers)
+ for p in items:
+  s=sales.get(p.sale_id);valid='정상' if all([p.bank,p.account_number,p.account_holder,p.amount>0]) else '확인필요';ws.append([s.customer_name if s else p.account_holder,p.bank or '',p.account_number or '',p.amount,'고무신모바일',f'{month} {s.customer_name if s else p.account_holder}',valid])
+ for cell in ws[1]:cell.font=Font(bold=True,color='FFFFFF');cell.fill=PatternFill('solid',fgColor='14324A');cell.alignment=Alignment(horizontal='center')
+ ws.freeze_panes='A2';ws.auto_filter.ref=f'A1:G{ws.max_row}'
+ for col,w in zip('ABCDEFG',[16,13,24,15,20,22,13]):ws.column_dimensions[col].width=w
+ for title in ['우리은행 업로드','KB국민은행 업로드']:
+  bank_ws=wb.create_sheet(title);bank_ws.append(['은행코드/은행명','계좌번호','이체금액','받는분 통장표시','내 통장표시'])
+  for p in items:
+   s=sales.get(p.sale_id);bank_ws.append([p.bank or '',p.account_number or '',p.amount,'고무신모바일',f'{month} {s.customer_name if s else p.account_holder}'])
+  bank_ws.freeze_panes='A2'
+ audit('페이백 대량이체 다운로드','payback','bulk',f'{len(items)}건 / {sum(p.amount for p in items):,}원');db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
+ return send_file(out,as_attachment=True,download_name=f'TrustFlow_페이백대량이체_{date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 @app.post('/paybacks/<int:pid>/reopen')
 @login_required
@@ -1381,7 +1439,7 @@ def staff_edit(uid):
   display_name=request.form.get('display_name','').strip()
   if not display_name:
    flash('직원명을 입력해주세요.','error'); return redirect(url_for('staff_edit',uid=uid))
-  u.display_name=display_name; u.branch_id=request.form.get('branch_id') or None; u.role=request.form.get('role','staff'); u.recovery_phone=normalize_phone(request.form.get('recovery_phone','')); u.active=request.form.get('active')=='1'
+  u.display_name=display_name; u.branch_id=request.form.get('branch_id') or None; u.role=request.form.get('role','staff'); u.recovery_phone=normalize_phone(request.form.get('recovery_phone','')); u.active=request.form.get('active')=='1';u.can_approve_payback=request.form.get('can_approve_payback')=='1'
   new_pw=request.form.get('password','')
   if new_pw: u.password_hash=generate_password_hash(new_pw)
   db.session.commit()
@@ -1422,3 +1480,15 @@ def account_request_complete(request_id):
  item=AccountRequest.query.get_or_404(request_id)
  if item.company_code!=(session.get('company_code') or 'trustflow'): abort(403)
  item.status='완료'; db.session.commit(); flash('비밀번호 재설정 요청을 완료 처리했습니다.','success'); return redirect(url_for('staff'))
+
+@app.route('/audit-logs')
+@login_required
+@admin_required
+def audit_logs():
+ prepare_database();action=request.args.get('action','').strip();day=request.args.get('date','').strip();q=AuditLog.query.filter_by(company_code=session.get('company_code') or 'trustflow')
+ if action:q=q.filter_by(action=action)
+ if day:
+  d=parse_date(day)
+  if d:q=q.filter(AuditLog.created_at>=datetime.combine(d,datetime.min.time()),AuditLog.created_at<datetime.combine(d+timedelta(days=1),datetime.min.time()))
+ items=q.order_by(AuditLog.created_at.desc()).limit(1000).all();actions=[x[0] for x in db.session.query(AuditLog.action).filter_by(company_code=session.get('company_code') or 'trustflow').distinct().order_by(AuditLog.action).all()]
+ return render_template('audit_logs.html',items=items,actions=actions,action=action,date_filter=day,branches={b.id:b for b in Branch.query.all()})
