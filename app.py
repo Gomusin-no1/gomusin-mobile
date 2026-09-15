@@ -263,7 +263,11 @@ def payback_query_scoped():
 
 def can_approve_payback():
  if is_admin():return True
- try:return bool(User.query.get(session.get('user_id')).can_approve_payback)
+ user_id=session.get('user_id')
+ if not user_id:return False
+ try:
+  user=db.session.get(User,user_id)
+  return bool(user and user.can_approve_payback)
  except:return False
 
 def audit(action,target_type='',target_id='',detail='',branch_id=None,commit=False):
