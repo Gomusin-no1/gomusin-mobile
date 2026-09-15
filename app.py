@@ -1,9 +1,10 @@
 import os, calendar, io, secrets, json
 from datetime import datetime, date, timedelta
 from functools import wraps
-from flask import Flask, render_template, request, redirect, url_for, session, flash, abort, jsonify, send_file
+from flask import Flask, render_template, request, redirect, url_for, session, flash, abort, jsonify, send_file, has_request_context
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import or_, text
+from sqlalchemy import or_, text, event
+from sqlalchemy.orm import Session as OrmSession, with_loader_criteria
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
@@ -24,6 +25,33 @@ app.config.update(
 )
 db=SQLAlchemy(app)
 
+LOGIN_STORIES=[
+ ('TRUST IN MOTION','신뢰가 흐르면,','업무는 더 정확해집니다.','고객과의 첫 약속부터 사후관리까지 놓치지 않는 하나의 업무 흐름.',['약속 관리','정확한 기록','안전한 업무']),
+ ('CONNECTED GROWTH','연결된 데이터가,','매장의 성장을 만듭니다.','흩어진 고객·판매·재고 정보를 한곳에서 빠르고 분명하게 관리하세요.',['고객 연결','실시간 현황','성장 데이터']),
+ ('ONE CLEAR FLOW','복잡한 업무를,','하나의 흐름으로.','오늘 해야 할 일과 중요한 숫자를 가장 먼저 보여드립니다.',['오늘의 업무','빠른 판단','간결한 실행']),
+ ('CUSTOMER FIRST','고객을 기억하는,','가장 스마트한 방법.','상담 내용과 약속, 가족 고객의 이력까지 자연스럽게 이어집니다.',['상담 이력','가족 연결','맞춤 응대']),
+ ('PRECISION DAILY','매일의 정확함이,','오래가는 신뢰가 됩니다.','작은 누락도 줄이고 모든 업무의 진행 상태를 투명하게 확인하세요.',['누락 방지','진행 추적','책임 관리']),
+ ('SECURE BY DESIGN','보이지 않는 곳까지,','안전하게 설계했습니다.','회사와 지점 권한을 서버에서 분리해 필요한 정보만 안전하게 보여줍니다.',['회사별 분리','지점 권한','접근 기록']),
+ ('SMART OPERATION','더 적게 찾고,','더 빠르게 처리하세요.','고객 검색부터 개통·재고·정산까지 실무 동선을 짧게 연결합니다.',['통합 검색','자동 입력','빠른 처리']),
+ ('PROMISE KEEPER','고객과의 약속을,','끝까지 지킵니다.','변경일·해지일·페이백 일정을 놓치지 않도록 먼저 알려드립니다.',['기한 알림','약속 완료','사후관리']),
+ ('VISIBLE RESULT','과정은 투명하게,','결과는 한눈에.','매장별 실적과 정산 흐름을 정확한 숫자로 확인하세요.',['매장 현황','정산 흐름','결과 확인']),
+ ('TEAM ALIGNMENT','팀의 모든 업무가,','같은 방향으로 흐릅니다.','담당자와 진행 상황을 공유해 인수인계와 협업을 더 매끄럽게 만듭니다.',['담당자 배정','업무 공유','인수인계']),
+ ('DATA WITH PURPOSE','기록을 넘어,','판단에 도움이 되는 데이터.','필요한 순간에 필요한 고객과 업무 정보를 바로 찾을 수 있습니다.',['스마트 검색','이력 연결','업무 판단']),
+ ('RELIABLE CONTROL','매장 운영의 중심을,','더 단단하게.','시재·재고·페이백을 기준과 승인 절차에 맞춰 관리합니다.',['시재 관리','재고 추적','승인 절차']),
+ ('SEAMLESS SERVICE','상담에서 완료까지,','끊김 없는 고객 경험.','문의와 상담 기록을 이어 받아 누구나 일관된 응대를 할 수 있습니다.',['상담 연속성','응대 기준','고객 경험']),
+ ('BRANCH INTELLIGENCE','모든 지점은 연결하고,','권한은 정확히 나눕니다.','관리자는 전체를 보고 직원은 소속 지점 업무에 집중합니다.',['지점 통합','권한 분리','관리자 시야']),
+ ('MOMENTUM','오늘의 실행이,','내일의 성장을 앞당깁니다.','우선순위가 분명한 화면으로 중요한 업무부터 빠르게 끝내세요.',['업무 우선순위','집중 실행','성장 리듬']),
+ ('CLEAR STANDARD','사람이 바뀌어도,','업무 기준은 흔들리지 않게.','정해진 절차와 기록으로 매장 서비스의 품질을 일정하게 유지합니다.',['표준 업무','품질 유지','안전한 기록']),
+ ('TRUSTED INSIGHT','숫자 속에서,','다음 기회를 발견합니다.','판매와 고객 데이터를 연결해 놓치기 쉬운 기회를 보여드립니다.',['판매 분석','고객 기회','실행 제안']),
+ ('CALM CONTROL','바쁜 매장일수록,','화면은 더 차분하게.','필요한 정보만 선명하게 정리해 실수와 피로를 줄입니다.',['직관적 화면','실수 예방','업무 집중']),
+ ('FUTURE READY','오늘의 매장에서,','내일의 시스템으로.','지점이 늘어나도 같은 기준으로 확장할 수 있는 운영 기반을 만듭니다.',['확장 준비','통합 기준','지속 성장']),
+ ('BUILT ON TRUST','신뢰로 연결하고,','데이터로 성장합니다.','고객과의 약속부터 매장 운영까지 하나의 흐름으로 정확하게 관리하세요.',['안전한 계정','실시간 운영','고객 신뢰'])
+]
+
+def login_story():
+ index=secrets.randbelow(len(LOGIN_STORIES)); kicker,title_a,title_b,body,tags=LOGIN_STORIES[index]
+ return {'image':f'images/login/hero-{index+1:02d}.webp','kicker':kicker,'title_a':title_a,'title_b':title_b,'body':body,'tags':tags}
+
 class User(db.Model):
  id=db.Column(db.Integer,primary_key=True); username=db.Column(db.String(50),unique=True,nullable=False,index=True)
  password_hash=db.Column(db.String(255),nullable=False); role=db.Column(db.String(20),nullable=False,default='staff')
@@ -39,9 +67,10 @@ class AccountRequest(db.Model):
 class Branch(db.Model):
  id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),unique=True,nullable=False,index=True)
  code=db.Column(db.String(30),unique=True); address=db.Column(db.String(255)); phone=db.Column(db.String(30)); manager_name=db.Column(db.String(50))
- active=db.Column(db.Boolean,default=True,nullable=False); memo=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
+ company_code=db.Column(db.String(50),default='trustflow',nullable=False,index=True); active=db.Column(db.Boolean,default=True,nullable=False); memo=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
 class Customer(db.Model):
  id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),nullable=False); phone=db.Column(db.String(30),index=True); device=db.Column(db.String(100)); carrier=db.Column(db.String(30)); status=db.Column(db.String(30),default='상담중',nullable=False); memo=db.Column(db.Text)
+ company_code=db.Column(db.String(50),default='trustflow',nullable=False,index=True); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id'),index=True)
  address_road=db.Column(db.String(255),index=True); address_jibun=db.Column(db.String(255),index=True); address_detail=db.Column(db.String(255)); address_key=db.Column(db.String(255),index=True)
  created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False); updated_at=db.Column(db.DateTime,default=datetime.utcnow,onupdate=datetime.utcnow,nullable=False)
 class Booking(db.Model):
@@ -227,6 +256,25 @@ def current_branch_id():
  try:return int(session.get('branch_id')) if session.get('branch_id') not in [None,''] else None
  except:return None
 
+def current_company():
+ return (session.get('company_code') or 'trustflow').strip().lower()
+
+@event.listens_for(OrmSession,'do_orm_execute')
+def tenant_read_filter(execute_state):
+ if execute_state.execution_options.get('skip_tenant') or not execute_state.is_select or not has_request_context() or not session.get('user_id'):return
+ company=current_company()
+ execute_state.statement=execute_state.statement.options(
+  with_loader_criteria(Branch,lambda row:row.company_code==company,include_aliases=True),
+  with_loader_criteria(Customer,lambda row:row.company_code==company,include_aliases=True)
+ )
+
+@event.listens_for(OrmSession,'before_flush')
+def tenant_write_defaults(db_session,flush_context,instances):
+ if not has_request_context() or not session.get('user_id'):return
+ company=current_company()
+ for obj in db_session.new:
+  if isinstance(obj,(Branch,Customer)) and not obj.company_code:obj.company_code=company
+
 def is_admin():
  return session.get('role')=='admin'
 
@@ -234,15 +282,34 @@ def enforce_user_company(user):
  if not user or user.company_code!=(session.get('company_code') or 'trustflow'): abort(403)
 
 def enforce_branch(branch_id):
- if is_admin(): return
- if not current_branch_id() or int(branch_id or 0)!=current_branch_id(): abort(403)
+ try:bid=int(branch_id or 0)
+ except:abort(403)
+ branch=db.session.get(Branch,bid)
+ if not branch or branch.company_code!=current_company():abort(403)
+ if not is_admin() and (not current_branch_id() or bid!=current_branch_id()): abort(403)
 
 def apply_branch_scope(query, model):
- if not is_admin():
+ if is_admin():
+  query=query.filter(model.branch_id.in_(db.session.query(Branch.id)))
+ else:
   bid=current_branch_id()
   if not bid:return query.filter(db.text('1=0'))
   query=query.filter(model.branch_id==bid)
  return query
+
+def customer_query_scoped():
+ q=Customer.query
+ if is_admin():return q
+ bid=current_branch_id()
+ if not bid:return q.filter(Customer.id==-1)
+ branch_phones=db.session.query(Sale.customer_phone).filter(Sale.branch_id==bid,Sale.customer_phone.isnot(None))
+ return q.filter(or_(Customer.branch_id==bid,Customer.phone.in_(branch_phones)))
+
+def customer_allowed(customer):
+ if not customer:return False
+ if is_admin():return True
+ bid=current_branch_id()
+ return bool(bid and (customer.branch_id==bid or (customer.phone and Sale.query.filter_by(customer_phone=customer.phone,branch_id=bid).first())))
 
 def sale_allowed(sale):
  return bool(sale and (is_admin() or (current_branch_id() and sale.branch_id==current_branch_id())))
@@ -335,7 +402,7 @@ def upgrade_existing_sale():
 
 def seed_branches():
  for idx,name in enumerate(['1호점','2호점','3호점'],1):
-  if not Branch.query.filter_by(name=name).first(): db.session.add(Branch(name=name,code=f'B{idx:02d}'))
+  if not Branch.query.execution_options(skip_tenant=True).filter_by(name=name).first(): db.session.add(Branch(name=name,code=f'B{idx:02d}',company_code='trustflow'))
  db.session.commit()
 
 
@@ -441,7 +508,7 @@ def seed_masters():
  db.session.commit()
 
 def prepare_database():
- db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('customer',{'address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale(); seed_branches(); seed_masters()
+ db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale(); seed_branches(); seed_masters()
 
 def sync_admin():
  prepare_database(); u=os.environ.get('ADMIN_USERNAME','').strip(); p=os.environ.get('ADMIN_PASSWORD',''); company_code=os.environ.get('COMPANY_LOGIN_ID','trustflow').strip().lower() or 'trustflow'
@@ -482,11 +549,11 @@ def login():
   company_code=request.form.get('company_code','').strip().lower()
   user=User.query.filter_by(username=request.form.get('username','').strip(),company_code=company_code).first()
   if user and user.active is False:
-   flash('비활성화된 직원 계정입니다. 관리자에게 문의해주세요.','error'); return render_template('login.html')
+   flash('비활성화된 직원 계정입니다. 관리자에게 문의해주세요.','error'); return render_template('login.html',story=login_story())
   if user and check_password_hash(user.password_hash,request.form.get('password','')):
    session.clear();session.update(user_id=user.id,username=user.username,display_name=user.display_name or user.username,role=user.role,branch_id=user.branch_id,company_code=user.company_code);return redirect(url_for('dashboard'))
   flash('아이디 또는 비밀번호가 올바르지 않습니다.','error')
- return render_template('login.html')
+ return render_template('login.html',story=login_story())
 
 @app.route('/signup',methods=['GET','POST'])
 def signup():
@@ -630,7 +697,9 @@ def ob_management():
 @app.post('/customers/<int:cid>/contact-log')
 @login_required
 def contact_log_add(cid):
- c=Customer.query.get_or_404(cid); sale=Sale.query.filter_by(customer_phone=c.phone).order_by(Sale.opening_date.desc()).first(); bid=current_branch_id() if not is_admin() else (request.form.get('branch_id') or (sale.branch_id if sale else None))
+ c=Customer.query.get_or_404(cid)
+ if not customer_allowed(c):abort(403)
+ sale=Sale.query.filter_by(customer_phone=c.phone).order_by(Sale.opening_date.desc()).first(); bid=current_branch_id() if not is_admin() else (request.form.get('branch_id') or c.branch_id or (sale.branch_id if sale else None))
  if not bid:flash('담당 지점을 확인할 수 없습니다.','error');return redirect(url_for('customer_detail',cid=cid))
  enforce_branch(bid); note=request.form.get('note','').strip()
  if not note:flash('통화내용을 입력해주세요.','error');return redirect(url_for('customer_detail',cid=cid))
@@ -746,7 +815,7 @@ def task_edit(task_id):
 def customers():
  prepare_database(); q=request.args.get('q','').strip(); month=request.args.get('month','').strip(); branch_id=request.args.get('branch_id','').strip()
  if not is_admin(): branch_id=str(current_branch_id() or '')
- query=Customer.query
+ query=customer_query_scoped()
  if q:
   phone_q=normalize_phone(q); query=query.filter(or_(Customer.name.ilike(f'%{q}%'),Customer.phone.ilike(f'%{phone_q or q}%'),Customer.address_road.ilike(f'%{q}%'),Customer.address_jibun.ilike(f'%{q}%'),Customer.address_detail.ilike(f'%{q}%')))
  sale_scope=Sale.query
@@ -779,6 +848,7 @@ def customers():
 @login_required
 def customer_detail(cid):
  c=Customer.query.get_or_404(cid)
+ if not customer_allowed(c):abort(403)
  sq=Sale.query.filter_by(customer_phone=c.phone) if c.phone else Sale.query.filter(Sale.id==-1)
  if not is_admin(): sq=sq.filter(Sale.branch_id==current_branch_id())
  sale_history=sq.order_by(Sale.opening_date.desc(),Sale.id.desc()).all()
@@ -791,7 +861,7 @@ def customer_detail(cid):
  branches={b.id:b for b in Branch.query.all()}
  household=[]
  if c.address_key:
-  hq=Customer.query.filter(Customer.address_key==c.address_key,Customer.id!=c.id)
+  hq=customer_query_scoped().filter(Customer.address_key==c.address_key,Customer.id!=c.id)
   if not is_admin():
    allowed_phones=[r[0] for r in Sale.query.filter_by(branch_id=current_branch_id()).with_entities(Sale.customer_phone).distinct().all() if r[0]]; hq=hq.filter(Customer.phone.in_(allowed_phones or ['__none__']))
   household=hq.order_by(Customer.name).all()
@@ -807,24 +877,29 @@ def customer_new():
   name=request.form.get('name','').strip()
   if not name:flash('고객명을 입력해주세요.','error');return redirect(url_for('customer_new'))
   road=request.form.get('address_road','').strip(); jibun=request.form.get('address_jibun','').strip(); detail=request.form.get('address_detail','').strip(); key=request.form.get('address_key','').strip() or ('|'.join([road,jibun,detail]).lower().replace(' ',''))
-  db.session.add(Customer(name=name,phone=normalize_phone(request.form.get('phone','')),carrier=request.form.get('carrier',''),status=request.form.get('status','상담중'),memo=request.form.get('memo',''),address_road=road,address_jibun=jibun,address_detail=detail,address_key=key));db.session.commit();flash('고객이 등록되었습니다.','success');return redirect(url_for('customers'))
- return render_template('customer_form.html',customer=None)
+  bid=current_branch_id() if not is_admin() else request.form.get('branch_id')
+  if not bid:flash('고객을 등록할 지점을 선택해주세요.','error');return redirect(url_for('customer_new'))
+  enforce_branch(bid)
+  db.session.add(Customer(name=name,phone=normalize_phone(request.form.get('phone','')),carrier=request.form.get('carrier',''),status=request.form.get('status','상담중'),memo=request.form.get('memo',''),address_road=road,address_jibun=jibun,address_detail=detail,address_key=key,branch_id=int(bid),company_code=current_company()));db.session.commit();flash('고객이 등록되었습니다.','success');return redirect(url_for('customers'))
+ return render_template('customer_form.html',customer=None,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all())
 @app.route('/customers/<int:cid>/edit',methods=['GET','POST'])
 @login_required
 def customer_edit(cid):
  c=Customer.query.get_or_404(cid)
- if not is_admin():
-  if not (c.phone and Sale.query.filter_by(customer_phone=c.phone,branch_id=current_branch_id()).first()): abort(403)
+ if not customer_allowed(c):abort(403)
  if request.method=='POST':
   road=request.form.get('address_road','').strip(); jibun=request.form.get('address_jibun','').strip(); detail=request.form.get('address_detail','').strip(); key=request.form.get('address_key','').strip() or ('|'.join([road,jibun,detail]).lower().replace(' ',''))
-  c.name=request.form.get('name','').strip();c.phone=normalize_phone(request.form.get('phone',''));c.carrier=request.form.get('carrier','');c.status=request.form.get('status','상담중');c.memo=request.form.get('memo','');c.address_road=road;c.address_jibun=jibun;c.address_detail=detail;c.address_key=key;db.session.commit();flash('고객정보가 수정되었습니다.','success');return redirect(url_for('customers'))
- return render_template('customer_form.html',customer=c)
+  bid=current_branch_id() if not is_admin() else (request.form.get('branch_id') or c.branch_id)
+  enforce_branch(bid)
+  c.name=request.form.get('name','').strip();c.phone=normalize_phone(request.form.get('phone',''));c.carrier=request.form.get('carrier','');c.status=request.form.get('status','상담중');c.memo=request.form.get('memo','');c.address_road=road;c.address_jibun=jibun;c.address_detail=detail;c.address_key=key;c.branch_id=int(bid);db.session.commit();flash('고객정보가 수정되었습니다.','success');return redirect(url_for('customers'))
+ return render_template('customer_form.html',customer=c,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all())
 
 @app.post('/customers/<int:cid>/delete')
 @login_required
 @admin_required
 def customer_delete(cid):
  c=Customer.query.get_or_404(cid)
+ if not customer_allowed(c):abort(403)
  if c.phone and Sale.query.filter_by(customer_phone=c.phone).count():
   flash('개통이력이 있는 고객은 삭제할 수 없습니다. 고객정보 수정으로 관리해주세요.','error'); return redirect(url_for('customers'))
  CustomerTask.query.filter_by(customer_id=c.id).delete(synchronize_session=False); db.session.delete(c); db.session.commit()
@@ -995,7 +1070,7 @@ def branch_new():
  if request.method=='POST':
   name=request.form.get('name','').strip()
   if not name: flash('지점명을 입력해주세요.','error'); return redirect(url_for('branch_new'))
-  db.session.add(Branch(name=name,code=request.form.get('code'),address=request.form.get('address'),phone=request.form.get('phone'),manager_name=request.form.get('manager_name'),memo=request.form.get('memo'),active=True)); db.session.commit()
+  db.session.add(Branch(name=name,code=request.form.get('code'),address=request.form.get('address'),phone=request.form.get('phone'),manager_name=request.form.get('manager_name'),memo=request.form.get('memo'),active=True,company_code=current_company())); db.session.commit()
   flash('지점이 등록되었습니다.','success'); return redirect(url_for('branches'))
  return render_template('branch_form.html',branch=None)
 
