@@ -1492,3 +1492,27 @@ def audit_logs():
   if d:q=q.filter(AuditLog.created_at>=datetime.combine(d,datetime.min.time()),AuditLog.created_at<datetime.combine(d+timedelta(days=1),datetime.min.time()))
  items=q.order_by(AuditLog.created_at.desc()).limit(1000).all();actions=[x[0] for x in db.session.query(AuditLog.action).filter_by(company_code=session.get('company_code') or 'trustflow').distinct().order_by(AuditLog.action).all()]
  return render_template('audit_logs.html',items=items,actions=actions,action=action,date_filter=day,branches={b.id:b for b in Branch.query.all()})
+
+@app.get('/admin/backup.xlsx')
+@login_required
+@admin_required
+def admin_backup():
+ from openpyxl import Workbook
+ from openpyxl.styles import Font,PatternFill
+ wb=Workbook();wb.remove(wb.active);branch_names={b.id:b.name for b in Branch.query.all()}
+ def sheet(title,headers,rows):
+  ws=wb.create_sheet(title);ws.append(headers)
+  for cell in ws[1]:cell.font=Font(bold=True,color='FFFFFF');cell.fill=PatternFill('solid',fgColor='14324A')
+  for row in rows:ws.append(row)
+  ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
+  for col in ws.columns:
+   letter=col[0].column_letter;ws.column_dimensions[letter].width=min(38,max(11,max(len(str(c.value or '')) for c in col)+2))
+ sheet('고객',['ID','고객명','휴대전화','통신사','상태','도로명주소','지번주소','상세주소','메모','등록일'],[(x.id,x.name,x.phone,x.carrier,x.status,x.address_road,x.address_jibun,x.address_detail,x.memo,x.created_at) for x in Customer.query.order_by(Customer.id).all()])
+ sheet('판매일보',['ID','개통일','지점','고객명','휴대전화','통신사','개통유형','단말기','용량','색상','일련번호','요금제','판매자','정산금','최종마진'],[(x.id,x.opening_date,branch_names.get(x.branch_id),x.customer_name,x.customer_phone,x.carrier,x.opening_type,x.device,x.storage,x.color,x.serial_number,x.current_plan,x.assigned_staff,x.settlement_amount_v2,x.final_margin) for x in Sale.query.order_by(Sale.id).all()])
+ sheet('재고',['ID','지점','일련번호','통신사','제조사','모델','용량','색상','입고일','상태','매입가'],[(x.id,branch_names.get(x.branch_id),x.serial_number,x.carrier,x.manufacturer,x.model,x.capacity,x.color,x.received_date,x.status,x.purchase_price) for x in Inventory.query.order_by(Inventory.id).all()])
+ sheet('페이백',['ID','판매ID','예정일','금액','은행','계좌번호','예금주','승인상태','승인자','지급상태','지급자'],[(x.id,x.sale_id,x.due_date,x.amount,x.bank,x.account_number,x.account_holder,x.approval_status,x.approved_by,x.status,x.processed_by) for x in Payback.query.order_by(Payback.id).all()])
+ sheet('시재',['ID','날짜','지점','입출금','항목','수단','금액','거래처','메모','등록자'],[(x.id,x.ledger_date,branch_names.get(x.branch_id),x.direction,x.category,x.payment_method,x.amount,x.counterparty,x.memo,x.created_by) for x in CashLedger.query.order_by(CashLedger.id).all()])
+ sheet('상담기록',['ID','고객ID','지점','일시','담당자','채널','결과','내용','다음연락일'],[(x.id,x.customer_id,branch_names.get(x.branch_id),x.contacted_at,x.staff_name,x.channel,x.outcome,x.note,x.next_contact_date) for x in ContactLog.query.order_by(ContactLog.id).all()])
+ sheet('법률업무',['ID','고객ID','지점','유형','금액','발생일','청구사유','증빙','지급기한','상태','담당자'],[(x.id,x.customer_id,branch_names.get(x.branch_id),x.case_type,x.claim_amount,x.incident_date,x.reason,x.evidence,x.demand_due_date,x.status,x.assigned_staff) for x in LegalCase.query.order_by(LegalCase.id).all()])
+ audit('관리자 전체백업 다운로드','system','backup',f'{date.today()} 운영데이터 7개 시트');db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
+ return send_file(out,as_attachment=True,download_name=f'TrustFlow_운영백업_{date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
