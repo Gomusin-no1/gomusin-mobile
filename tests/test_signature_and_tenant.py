@@ -5,7 +5,8 @@ os.environ['DATABASE_URL']='sqlite:///:memory:'
 os.environ['ADMIN_USERNAME']=''
 os.environ['ADMIN_PASSWORD']=''
 
-from app import app, db, User, Branch, Customer, LOGIN_STORIES
+from werkzeug.security import generate_password_hash, check_password_hash
+from app import app, db, User, Branch, Customer, LOGIN_STORIES, PhoneVerification
 
 
 class SignatureAndTenantTest(unittest.TestCase):
@@ -18,7 +19,7 @@ class SignatureAndTenantTest(unittest.TestCase):
    b=Branch(name='B 본점',code='B99',company_code='company-b')
    db.session.add_all([a,b]);db.session.flush()
    db.session.add_all([
-    User(username='admin-a',password_hash='unused',role='admin',display_name='A관리자',company_code='company-a',branch_id=a.id,active=True),
+    User(username='admin-a',password_hash=generate_password_hash('old-password'),role='admin',display_name='A관리자',company_code='company-a',branch_id=a.id,recovery_phone='01011112222',active=True),
     User(username='admin-b',password_hash='unused',role='admin',display_name='B관리자',company_code='company-b',branch_id=b.id,active=True),
     Customer(name='A 고객',phone='01011112222',company_code='company-a',branch_id=a.id),
     Customer(name='B 고객',phone='01033334444',company_code='company-b',branch_id=b.id)
@@ -45,6 +46,35 @@ class SignatureAndTenantTest(unittest.TestCase):
  def test_direct_cross_company_customer_access_is_blocked(self):
   self.login_as_a();response=self.client.get(f'/customers/{self.b_customer}')
   self.assertEqual(404,response.status_code)
+
+ def test_login_fields_are_in_company_user_password_order(self):
+  body=self.client.get('/login').get_data(as_text=True)
+  self.assertLess(body.index('name="company_code"'),body.index('name="username"'))
+  self.assertLess(body.index('name="username"'),body.index('name="password"'))
+
+ def test_find_id_requires_phone_code(self):
+  response=self.client.post('/find-id',data={'action':'send','company_code':'company-a','display_name':'A관리자','phone':'01011112222'})
+  self.assertIn('인증번호를 문자로 보냈습니다'.encode(),response.data)
+  response=self.client.post('/find-id',data={'action':'verify','company_code':'company-a','display_name':'A관리자','phone':'01011112222','code':'123456'})
+  self.assertIn(b'admin-a',response.data)
+
+ def test_password_can_reset_after_phone_code(self):
+  base={'company_code':'company-a','username':'admin-a','display_name':'A관리자','phone':'01011112222'}
+  self.client.post('/password-help',data={**base,'action':'send'})
+  response=self.client.post('/password-help',data={**base,'action':'reset','code':'123456','new_password':'new-password'})
+  self.assertIn('비밀번호 변경 완료'.encode(),response.data)
+  with app.app_context():self.assertTrue(check_password_hash(User.query.filter_by(username='admin-a').first().password_hash,'new-password'))
+
+ def test_password_reset_rejects_wrong_code(self):
+  base={'company_code':'company-a','username':'admin-a','display_name':'A관리자','phone':'01011112222'}
+  self.client.post('/password-help',data={**base,'action':'send'})
+  response=self.client.post('/password-help',data={**base,'action':'reset','code':'999999','new_password':'new-password'})
+  self.assertIn('인증번호가 올바르지 않습니다'.encode(),response.data)
+
+ def test_login_is_limited_after_five_failures(self):
+  for _ in range(5):self.client.post('/login',data={'company_code':'company-a','username':'admin-a','password':'wrong'})
+  response=self.client.post('/login',data={'company_code':'company-a','username':'admin-a','password':'old-password'})
+  self.assertEqual(429,response.status_code)
 
 
 if __name__=='__main__':unittest.main()

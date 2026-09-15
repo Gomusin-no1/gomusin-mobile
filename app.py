@@ -1,4 +1,4 @@
-import os, calendar, io, secrets, json
+import os, calendar, io, secrets, json, hashlib, urllib.request
 from datetime import datetime, date, timedelta
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, flash, abort, jsonify, send_file, has_request_context
@@ -63,6 +63,17 @@ class User(db.Model):
 class AccountRequest(db.Model):
  id=db.Column(db.Integer,primary_key=True); request_type=db.Column(db.String(20),nullable=False)
  company_code=db.Column(db.String(50),nullable=False,index=True); username=db.Column(db.String(50)); display_name=db.Column(db.String(50)); phone=db.Column(db.String(30)); status=db.Column(db.String(20),default='대기',nullable=False); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
+
+class PhoneVerification(db.Model):
+ id=db.Column(db.Integer,primary_key=True)
+ purpose=db.Column(db.String(30),nullable=False,index=True); company_code=db.Column(db.String(50),nullable=False,index=True)
+ phone=db.Column(db.String(30),nullable=False,index=True); code_hash=db.Column(db.String(64),nullable=False)
+ attempts=db.Column(db.Integer,default=0,nullable=False); verified_at=db.Column(db.DateTime); expires_at=db.Column(db.DateTime,nullable=False,index=True)
+ created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False,index=True)
+
+class LoginAttempt(db.Model):
+ id=db.Column(db.Integer,primary_key=True); company_code=db.Column(db.String(50),nullable=False,index=True); username=db.Column(db.String(50),nullable=False,index=True)
+ ip_address=db.Column(db.String(80),nullable=False,index=True); succeeded=db.Column(db.Boolean,default=False,nullable=False); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False,index=True)
 
 class Branch(db.Model):
  id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),unique=True,nullable=False,index=True)
@@ -219,6 +230,41 @@ def money(v):
 def normalize_phone(v):
  digits=''.join(ch for ch in str(v or '') if ch.isdigit())
  return digits[:11]
+
+def _verification_hash(code):
+ return hashlib.sha256(f"{app.config['SECRET_KEY']}:{code}".encode()).hexdigest()
+
+def _send_sms(phone,message):
+ """Send through a provider-neutral HTTPS webhook configured in Render."""
+ if app.config.get('TESTING'):return True
+ endpoint=os.environ.get('SMS_WEBHOOK_URL','').strip(); token=os.environ.get('SMS_WEBHOOK_TOKEN','').strip()
+ if not endpoint:return False
+ payload=json.dumps({'to':phone,'message':message,'sender':os.environ.get('SMS_SENDER','TrustFlow')},ensure_ascii=False).encode()
+ headers={'Content-Type':'application/json'}
+ if token:headers['Authorization']=f'Bearer {token}'
+ try:
+  with urllib.request.urlopen(urllib.request.Request(endpoint,data=payload,headers=headers,method='POST'),timeout=8) as response:
+   return 200<=response.status<300
+ except Exception:return False
+
+def issue_phone_code(purpose,company,phone):
+ now=datetime.utcnow(); recent=PhoneVerification.query.filter_by(purpose=purpose,company_code=company,phone=phone).filter(PhoneVerification.created_at>now-timedelta(minutes=1)).first()
+ if recent:return False,'인증번호는 1분 후 다시 요청할 수 있습니다.'
+ code=os.environ.get('SMS_TEST_CODE','123456') if app.config.get('TESTING') else f'{secrets.randbelow(1000000):06d}'
+ item=PhoneVerification(purpose=purpose,company_code=company,phone=phone,code_hash=_verification_hash(code),expires_at=now+timedelta(minutes=5))
+ db.session.add(item);db.session.commit()
+ if not _send_sms(phone,f'[TrustFlow] 인증번호는 {code}입니다. 5분 안에 입력해주세요.'):
+  db.session.delete(item);db.session.commit();return False,'문자 인증 서비스 연결이 아직 완료되지 않았습니다. 관리자에게 문의해주세요.'
+ return True,'인증번호를 문자로 보냈습니다. 5분 안에 입력해주세요.'
+
+def verify_phone_code(purpose,company,phone,code):
+ item=PhoneVerification.query.filter_by(purpose=purpose,company_code=company,phone=phone).order_by(PhoneVerification.id.desc()).first(); now=datetime.utcnow()
+ if not item or item.verified_at or item.expires_at<now:return False,'인증번호가 만료됐습니다. 다시 받아주세요.'
+ if item.attempts>=5:return False,'입력 횟수를 초과했습니다. 새 인증번호를 받아주세요.'
+ item.attempts+=1
+ if not secrets.compare_digest(item.code_hash,_verification_hash((code or '').strip())):
+  db.session.commit();return False,'인증번호가 올바르지 않습니다.'
+ item.verified_at=now;db.session.commit();return True,''
 
 def parse_date(v):
  try:return datetime.strptime((v or '').strip(),'%Y-%m-%d').date() if v else None
@@ -547,11 +593,16 @@ def login():
  except Exception as e:return f'DB 연결 오류: {e}',500
  if request.method=='POST':
   company_code=request.form.get('company_code','').strip().lower()
-  user=User.query.filter_by(username=request.form.get('username','').strip(),company_code=company_code).first()
+  username=request.form.get('username','').strip(); ip=(request.headers.get('X-Forwarded-For','').split(',')[0].strip() or request.remote_addr or 'unknown'); since=datetime.utcnow()-timedelta(minutes=15)
+  failures=LoginAttempt.query.filter_by(company_code=company_code,username=username,ip_address=ip,succeeded=False).filter(LoginAttempt.created_at>=since).count()
+  if failures>=5:
+   flash('로그인 시도가 많습니다. 15분 후 다시 시도하거나 비밀번호를 재설정해주세요.','error');return render_template('login.html',story=login_story()),429
+  user=User.query.filter_by(username=username,company_code=company_code).first()
   if user and user.active is False:
    flash('비활성화된 직원 계정입니다. 관리자에게 문의해주세요.','error'); return render_template('login.html',story=login_story())
   if user and check_password_hash(user.password_hash,request.form.get('password','')):
-   session.clear();session.update(user_id=user.id,username=user.username,display_name=user.display_name or user.username,role=user.role,branch_id=user.branch_id,company_code=user.company_code);return redirect(url_for('dashboard'))
+   db.session.add(LoginAttempt(company_code=company_code,username=username,ip_address=ip,succeeded=True));db.session.commit();session.clear();session.update(user_id=user.id,username=user.username,display_name=user.display_name or user.username,role=user.role,branch_id=user.branch_id,company_code=user.company_code);return redirect(url_for('dashboard'))
+  db.session.add(LoginAttempt(company_code=company_code,username=username,ip_address=ip,succeeded=False));db.session.commit()
   flash('아이디 또는 비밀번호가 올바르지 않습니다.','error')
  return render_template('login.html',story=login_story())
 
@@ -569,20 +620,39 @@ def signup():
 
 @app.route('/find-id',methods=['GET','POST'])
 def find_id():
- found=None
+ prepare_database(); found=None; verification_sent=False
  if request.method=='POST':
-  company=request.form.get('company_code','').strip().lower(); name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('phone',''))
-  user=User.query.filter_by(company_code=company,display_name=name,recovery_phone=phone).first(); found=user.username if user else ''
- return render_template('find_id.html',found=found)
+  company=request.form.get('company_code','').strip().lower(); name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('phone','')); action=request.form.get('action','send')
+  user=User.query.filter_by(company_code=company,display_name=name,recovery_phone=phone).first()
+  if action=='send':
+   if user:
+    ok,message=issue_phone_code('find_id',company,phone); flash(message,'success' if ok else 'error'); verification_sent=ok
+   else:flash('입력한 정보와 일치하는 계정을 찾지 못했습니다.','error')
+  elif action=='verify' and user:
+   ok,message=verify_phone_code('find_id',company,phone,request.form.get('code'))
+   if ok:found=user.username
+   else:flash(message,'error');verification_sent=True
+  else:flash('입력한 정보와 일치하는 계정을 찾지 못했습니다.','error')
+ return render_template('find_id.html',found=found,verification_sent=verification_sent,form=request.form)
 
 @app.route('/password-help',methods=['GET','POST'])
 def password_help():
+ prepare_database(); verification_sent=False; reset_done=False
  if request.method=='POST':
-  company=request.form.get('company_code','').strip().lower(); username=request.form.get('username','').strip(); name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('phone',''))
+  company=request.form.get('company_code','').strip().lower(); username=request.form.get('username','').strip(); name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('phone','')); action=request.form.get('action','send')
   user=User.query.filter_by(company_code=company,username=username,display_name=name,recovery_phone=phone).first()
-  if user: db.session.add(AccountRequest(request_type='비밀번호',company_code=company,username=username,display_name=name,phone=phone)); db.session.commit()
-  flash('입력정보가 일치하면 회사 관리자에게 재설정 요청이 전달됩니다.','success'); return redirect(url_for('login'))
- return render_template('password_help.html')
+  if action=='send':
+   if user:
+    ok,message=issue_phone_code('password_reset',company,phone);flash(message,'success' if ok else 'error');verification_sent=ok
+   else:flash('입력한 정보와 일치하는 계정을 찾지 못했습니다.','error')
+  elif action=='reset' and user:
+   ok,message=verify_phone_code('password_reset',company,phone,request.form.get('code')); password=request.form.get('new_password','')
+   if not ok:flash(message,'error');verification_sent=True
+   elif len(password)<8:flash('새 비밀번호는 8자 이상 입력해주세요.','error');verification_sent=True
+   else:
+    user.password_hash=generate_password_hash(password);db.session.add(AccountRequest(request_type='비밀번호완료',company_code=company,username=username,display_name=name,phone=phone,status='완료'));db.session.commit();reset_done=True
+  else:flash('입력한 정보와 일치하는 계정을 찾지 못했습니다.','error')
+ return render_template('password_help.html',verification_sent=verification_sent,reset_done=reset_done,form=request.form)
 
 @app.route('/logout')
 def logout():session.clear();return redirect(url_for('login'))
