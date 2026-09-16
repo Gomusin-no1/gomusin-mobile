@@ -643,16 +643,26 @@ def login():
 
 @app.route('/signup',methods=['GET','POST'])
 def signup():
- prepare_database()
+ prepare_database();verification_sent=False
  if request.method=='POST':
-  company=request.form.get('company_code','').strip().lower(); username=request.form.get('username','').strip(); name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('phone','')); password=request.form.get('password','')
-  if not all([company,username,name,phone,password]): flash('모든 항목을 입력해주세요.','error')
-  elif len(phone)!=11 or not phone.startswith('010'): flash('휴대전화 번호를 010부터 숫자 11자리로 입력해주세요.','error')
-  elif not User.query.filter_by(company_code=company).first(): flash('등록되지 않은 회사 전체아이디입니다.','error')
-  elif User.query.filter_by(company_code=company,username=username).first(): flash('이 회사에서 이미 사용 중인 개인아이디입니다.','error')
+  company=request.form.get('company_code','').strip().lower(); username=request.form.get('username','').strip(); name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('phone','')); password=request.form.get('password','');action=request.form.get('action','register')
+  company_exists=bool(company and User.query.filter_by(company_code=company).first())
+  if action=='send':
+   if not all([company,name,phone]):flash('회사 전체아이디, 이름, 휴대전화를 입력해주세요.','error')
+   elif not company_exists:flash('등록되지 않은 회사 전체아이디입니다.','error')
+   else:
+    ok,message=issue_phone_code('signup',company,phone);flash(message,'success' if ok else 'error');verification_sent=ok or bool(PhoneVerification.query.filter_by(purpose='signup',company_code=company,phone=phone).filter(PhoneVerification.expires_at>datetime.utcnow(),PhoneVerification.verified_at.is_(None)).first())
+  elif not all([company,username,name,phone,password]):flash('모든 항목을 입력해주세요.','error')
+  elif len(password)<8:flash('개인 비밀번호는 8자 이상 입력해주세요.','error');verification_sent=True
+  elif not company_exists:flash('등록되지 않은 회사 전체아이디입니다.','error')
+  elif User.query.filter_by(company_code=company,username=username).first():flash('이 회사에서 이미 사용 중인 개인아이디입니다.','error');verification_sent=True
   else:
-   db.session.add(User(username=username,password_hash=generate_password_hash(password),role='staff',display_name=name,company_code=company,recovery_phone=phone,active=False)); db.session.commit(); flash('가입 신청이 완료됐습니다. 회사 관리자의 승인을 기다려주세요.','success'); return redirect(url_for('login'))
- return render_template('signup.html')
+   ok,message=verify_phone_code('signup',company,phone,request.form.get('code'))
+   if not ok:flash(message,'error');verification_sent=True
+   else:
+    user=User(username=username,password_hash=generate_password_hash(password),role='staff',display_name=name,company_code=company,recovery_phone=phone,active=False)
+    db.session.add(user);db.session.add(AccountRequest(request_type='회원가입',company_code=company,username=username,display_name=name,phone=phone,status='대기'));db.session.commit();flash('가입 신청이 완료됐습니다. 회사 관리자의 승인을 기다려주세요.','success');return redirect(url_for('login'))
+ return render_template('signup.html',verification_sent=verification_sent,form=request.form)
 
 @app.route('/find-id',methods=['GET','POST'])
 def find_id():
