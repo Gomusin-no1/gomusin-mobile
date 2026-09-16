@@ -10,7 +10,7 @@ os.environ['ADMIN_USERNAME']=''
 os.environ['ADMIN_PASSWORD']=''
 
 from werkzeug.security import generate_password_hash, check_password_hash
-from app import app, db, User, Branch, Customer, Inventory, InventoryMovement, Sale, AccountRequest, LOGIN_STORIES, PhoneVerification, _send_sms, issue_phone_code
+from app import app, db, User, Branch, Customer, Inventory, InventoryMovement, Sale, WiredSale, CashLedger, AccountRequest, LOGIN_STORIES, PhoneVerification, _send_sms, issue_phone_code
 
 
 class SignatureAndTenantTest(unittest.TestCase):
@@ -61,6 +61,20 @@ class SignatureAndTenantTest(unittest.TestCase):
   sales=self.client.get('/sales');stock=self.client.get('/inventory')
   self.assertIn('A 판매고객'.encode(),sales.data);self.assertNotIn('B 비공개판매'.encode(),sales.data)
   self.assertIn(b'A-STOCK',stock.data);self.assertNotIn(b'B-STOCK',stock.data)
+
+ def test_admin_cannot_delete_other_company_sale(self):
+  with app.app_context():
+   foreign=Sale(customer_name='B 삭제차단',opening_date=date.today(),branch_id=self.b_branch);db.session.add(foreign);db.session.commit();sale_id=foreign.id
+  self.login_as_a();response=self.client.post(f'/sales/{sale_id}/delete')
+  self.assertEqual(403,response.status_code)
+  with app.app_context():self.assertIsNotNone(Sale.query.execution_options(skip_tenant=True).filter_by(id=sale_id).first())
+
+ def test_admin_wired_and_cash_lists_are_company_isolated(self):
+  with app.app_context():
+   db.session.add_all([WiredSale(sale_date=date.today(),customer_name='A 유선고객',branch_id=self.a_branch),WiredSale(sale_date=date.today(),customer_name='B 비공개유선',branch_id=self.b_branch),CashLedger(ledger_date=date.today(),branch_id=self.a_branch,direction='입금',category='A시재',amount=1000),CashLedger(ledger_date=date.today(),branch_id=self.b_branch,direction='입금',category='B비공개시재',amount=2000)]);db.session.commit()
+  self.login_as_a();wired=self.client.get('/wired-sales');ledger=self.client.get('/cash-ledger')
+  self.assertIn('A 유선고객'.encode(),wired.data);self.assertNotIn('B 비공개유선'.encode(),wired.data)
+  self.assertIn('A시재'.encode(),ledger.data);self.assertNotIn('B비공개시재'.encode(),ledger.data)
 
  def test_direct_cross_company_customer_access_is_blocked(self):
   self.login_as_a();response=self.client.get(f'/customers/{self.b_customer}')
