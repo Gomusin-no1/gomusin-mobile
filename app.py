@@ -1727,14 +1727,17 @@ def account_request_complete(request_id):
    except:flash('승인할 직원의 소속 지점을 선택해주세요.','error');return redirect(url_for('staff'))
    branch=Branch.query.filter_by(id=branch_id,company_code=item.company_code,active=True).first()
    if not branch:abort(403)
-   user.branch_id=branch.id;user.active=True;item.status='승인';message=f'{branch.name} 직원으로 가입을 승인했습니다.'
+   user.branch_id=branch.id;user.active=True;item.status='승인';message=f'{branch.name} 직원으로 가입을 승인했습니다.';sms_message=f'[TrustFlow] {user.display_name or user.username}님의 가입이 승인되었습니다. 회사 전체아이디와 개인아이디로 로그인해주세요.'
   elif decision=='reject':
-   user.active=False;item.status='반려';message='직원 가입을 반려했습니다.'
+   user.active=False;item.status='반려';message='직원 가입을 반려했습니다.';sms_message=f'[TrustFlow] {user.display_name or user.username}님의 가입 신청이 반려되었습니다. 회사 관리자에게 문의해주세요.'
   else:flash('승인 또는 반려를 선택해주세요.','error');return redirect(url_for('staff'))
   audit(f'직원 가입 {item.status}','user',user.id,f'{user.display_name or user.username} ({user.username})')
  else:
   item.status='완료';message='비밀번호 재설정 요청을 완료 처리했습니다.'
- db.session.commit();flash(message,'success');return redirect(url_for('staff'))
+ db.session.commit()
+ if item.request_type=='회원가입' and item.phone and not _send_sms(item.phone,sms_message):flash(f'{message} 단, 결과 안내 문자는 발송되지 않았습니다.','error')
+ else:flash(message,'success')
+ return redirect(url_for('staff'))
 
 @app.route('/audit-logs')
 @login_required
