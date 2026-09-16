@@ -9,7 +9,7 @@ os.environ['ADMIN_USERNAME']=''
 os.environ['ADMIN_PASSWORD']=''
 
 from werkzeug.security import generate_password_hash, check_password_hash
-from app import app, db, User, Branch, Customer, Inventory, InventoryMovement, Sale, LOGIN_STORIES, PhoneVerification, _send_sms, issue_phone_code
+from app import app, db, User, Branch, Customer, Inventory, InventoryMovement, Sale, AccountRequest, LOGIN_STORIES, PhoneVerification, _send_sms, issue_phone_code
 
 
 class SignatureAndTenantTest(unittest.TestCase):
@@ -88,6 +88,18 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.client.post('/find-id',data=base)
   response=self.client.post('/find-id',data=base)
   self.assertIn('1분 후 다시 요청'.encode(),response.data);self.assertIn('name="code"'.encode(),response.data)
+
+ def test_signup_requires_phone_verification_and_creates_approval_request(self):
+  base={'company_code':'company-a','display_name':'신입직원','phone':'010-5555-6666','username':'new-staff','password':'safe-password'}
+  response=self.client.post('/signup',data={**base,'action':'register','code':'123456'})
+  self.assertIn('인증번호가 만료'.encode(),response.data)
+  with app.app_context():self.assertIsNone(User.query.filter_by(username='new-staff').first())
+  self.client.post('/signup',data={**base,'action':'send'})
+  response=self.client.post('/signup',data={**base,'action':'register','code':'123456'},follow_redirects=False)
+  self.assertEqual(302,response.status_code)
+  with app.app_context():
+   user=User.query.filter_by(company_code='company-a',username='new-staff').one();request_item=AccountRequest.query.filter_by(company_code='company-a',username='new-staff').one()
+   self.assertFalse(user.active);self.assertEqual('01055556666',user.recovery_phone);self.assertEqual(('회원가입','대기'),(request_item.request_type,request_item.status))
 
  def test_login_is_limited_after_five_failures(self):
   for _ in range(5):self.client.post('/login',data={'company_code':'company-a','username':'admin-a','password':'wrong'})
