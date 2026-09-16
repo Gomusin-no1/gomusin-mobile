@@ -54,6 +54,23 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.assertIn('A 고객'.encode(),response.data)
   self.assertNotIn('B 고객'.encode(),response.data)
 
+ def test_deactivated_user_session_is_revoked_on_next_request(self):
+  self.login_as_a()
+  with app.app_context():
+   user=db.session.get(User,self.a_user);user.active=False;db.session.commit()
+  response=self.client.get('/',follow_redirects=False)
+  self.assertEqual(302,response.status_code);self.assertTrue(response.headers['Location'].endswith('/login'))
+  with self.client.session_transaction() as sess:self.assertNotIn('user_id',sess)
+
+ def test_role_and_branch_changes_refresh_in_existing_session(self):
+  self.login_as_a()
+  with app.app_context():
+   user=db.session.get(User,self.a_user);user.role='staff';user.branch_id=self.a2_branch;user.display_name='변경직원';db.session.commit()
+  response=self.client.get('/',follow_redirects=False)
+  self.assertEqual(200,response.status_code)
+  with self.client.session_transaction() as sess:
+   self.assertEqual(('staff',self.a2_branch,'변경직원'),(sess['role'],sess['branch_id'],sess['display_name']))
+
  def test_admin_sales_and_inventory_lists_are_company_isolated(self):
   with app.app_context():
    db.session.add_all([
