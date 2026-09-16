@@ -9,7 +9,7 @@ os.environ['ADMIN_USERNAME']=''
 os.environ['ADMIN_PASSWORD']=''
 
 from werkzeug.security import generate_password_hash, check_password_hash
-from app import app, db, User, Branch, Customer, Inventory, InventoryMovement, Sale, LOGIN_STORIES, PhoneVerification, _send_sms
+from app import app, db, User, Branch, Customer, Inventory, InventoryMovement, Sale, LOGIN_STORIES, PhoneVerification, _send_sms, issue_phone_code
 
 
 class SignatureAndTenantTest(unittest.TestCase):
@@ -75,6 +75,19 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.client.post('/password-help',data={**base,'action':'send'})
   response=self.client.post('/password-help',data={**base,'action':'reset','code':'999999','new_password':'new-password'})
   self.assertIn('인증번호가 올바르지 않습니다'.encode(),response.data)
+
+ def test_sms_request_is_limited_per_phone_and_hour(self):
+  with app.app_context():
+   for purpose in ('one','two','three','four','five'):
+    ok,_=issue_phone_code(purpose,'company-a','010-1111-2222');self.assertTrue(ok)
+   ok,message=issue_phone_code('six','company-a','01011112222')
+   self.assertFalse(ok);self.assertIn('1시간 후',message)
+
+ def test_sms_resend_cooldown_keeps_code_input_visible(self):
+  base={'company_code':'company-a','display_name':'A관리자','phone':'010-1111-2222','action':'send'}
+  self.client.post('/find-id',data=base)
+  response=self.client.post('/find-id',data=base)
+  self.assertIn('1분 후 다시 요청'.encode(),response.data);self.assertIn('name="code"'.encode(),response.data)
 
  def test_login_is_limited_after_five_failures(self):
   for _ in range(5):self.client.post('/login',data={'company_code':'company-a','username':'admin-a','password':'wrong'})
