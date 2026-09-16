@@ -411,7 +411,7 @@ def can_approve_payback():
  except:return False
 
 def notification_summary():
- if not session.get('user_id'):return {'total':0,'overdue_tasks':0,'today_tasks':0,'pending_approvals':0,'due_paybacks':0,'legal_deadlines':0}
+ if not session.get('user_id'):return {'total':0,'overdue_tasks':0,'today_tasks':0,'pending_approvals':0,'account_requests':0,'due_paybacks':0,'legal_deadlines':0}
  today=date.today(); open_states=['처리예정','연락안됨','연기']
  overdue_tasks=task_query_scoped().filter(CustomerTask.due_date<today,CustomerTask.status.in_(open_states)).count()
  today_tasks=task_query_scoped().filter(CustomerTask.due_date==today,CustomerTask.status.in_(open_states)).count()
@@ -420,7 +420,8 @@ def notification_summary():
  due_paybacks=pq.filter(Payback.status!='완료',Payback.due_date<=today).count()
  lq=apply_branch_scope(LegalCase.query,LegalCase)
  legal_deadlines=lq.filter(LegalCase.status.notin_(['완료','종결']),LegalCase.demand_due_date.isnot(None),LegalCase.demand_due_date<=today+timedelta(days=3)).count()
- return {'total':overdue_tasks+today_tasks+pending_approvals+due_paybacks+legal_deadlines,'overdue_tasks':overdue_tasks,'today_tasks':today_tasks,'pending_approvals':pending_approvals,'due_paybacks':due_paybacks,'legal_deadlines':legal_deadlines}
+ account_requests=AccountRequest.query.filter_by(company_code=current_company(),status='대기').count() if is_admin() else 0
+ return {'total':overdue_tasks+today_tasks+pending_approvals+account_requests+due_paybacks+legal_deadlines,'overdue_tasks':overdue_tasks,'today_tasks':today_tasks,'pending_approvals':pending_approvals,'account_requests':account_requests,'due_paybacks':due_paybacks,'legal_deadlines':legal_deadlines}
 
 def audit(action,target_type='',target_id='',detail='',branch_id=None,commit=False):
  try:
@@ -883,7 +884,8 @@ def notifications():
  legal_deadlines=lq.filter(LegalCase.status.notin_(['완료','종결']),LegalCase.demand_due_date.isnot(None),LegalCase.demand_due_date<=today+timedelta(days=3)).order_by(LegalCase.demand_due_date.asc()).limit(100).all()
  sale_ids=list({p.sale_id for p in due_paybacks+pending_approvals}); sales_map={s.id:s for s in Sale.query.filter(Sale.id.in_(sale_ids or [0])).all()}
  customer_ids=list({x.customer_id for x in legal_deadlines if x.customer_id}); customer_map={c.id:c for c in Customer.query.filter(Customer.id.in_(customer_ids or [0])).all()}
- return render_template('notifications.html',today=today,overdue_tasks=overdue_tasks,today_tasks=today_tasks,due_paybacks=due_paybacks,pending_approvals=pending_approvals,legal_deadlines=legal_deadlines,sales_map=sales_map,customer_map=customer_map)
+ account_requests=AccountRequest.query.filter_by(company_code=current_company(),status='대기').order_by(AccountRequest.created_at.asc()).limit(100).all() if is_admin() else []
+ return render_template('notifications.html',today=today,overdue_tasks=overdue_tasks,today_tasks=today_tasks,due_paybacks=due_paybacks,pending_approvals=pending_approvals,account_requests=account_requests,legal_deadlines=legal_deadlines,sales_map=sales_map,customer_map=customer_map)
 
 @app.post('/tasks/<int:task_id>/status')
 @login_required
