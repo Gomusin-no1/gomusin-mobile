@@ -71,6 +71,13 @@ class SignatureAndTenantTest(unittest.TestCase):
   with self.client.session_transaction() as sess:
    self.assertEqual(('staff',self.a2_branch,'변경직원'),(sess['role'],sess['branch_id'],sess['display_name']))
 
+ def test_staff_choices_and_direct_account_access_are_company_isolated(self):
+  self.login_as_a()
+  form=self.client.get('/sales/new')
+  self.assertIn('A관리자'.encode(),form.data);self.assertNotIn('B관리자'.encode(),form.data)
+  with app.app_context():foreign=User.query.execution_options(skip_tenant=True).filter_by(username='admin-b').one().id
+  self.assertEqual(404,self.client.get(f'/staff/{foreign}/edit').status_code)
+
  def test_admin_sales_and_inventory_lists_are_company_isolated(self):
   with app.app_context():
    db.session.add_all([
@@ -178,7 +185,7 @@ class SignatureAndTenantTest(unittest.TestCase):
   with app.app_context():
    db.session.add(User(username='other-pending',password_hash='unused',company_code='company-b',active=False));db.session.add(AccountRequest(request_type='회원가입',company_code='company-b',username='other-pending',status='대기'));db.session.commit();request_id=AccountRequest.query.filter_by(username='other-pending').one().id
   self.login_as_a();response=self.client.post(f'/account-requests/{request_id}/complete',data={'decision':'approve'})
-  self.assertEqual(403,response.status_code)
+  self.assertEqual(404,response.status_code)
   with app.app_context():self.assertFalse(User.query.execution_options(skip_tenant=True).filter_by(company_code='company-b',username='other-pending').one().active)
 
  def test_signup_approval_requires_company_branch(self):
