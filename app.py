@@ -704,6 +704,14 @@ def password_help():
 @app.route('/logout')
 def logout():session.clear();return redirect(url_for('login'))
 
+@app.get('/date-calculator')
+@login_required
+def date_calculator():
+ base=parse_date(request.args.get('base')) or date.today();raw=''.join(ch for ch in request.args.get('days','') if ch.isdigit())
+ days=int(raw or 0);result=base+timedelta(days=days)
+ start=parse_date(request.args.get('start')) or base;end=parse_date(request.args.get('end')) or start
+ return render_template('date_calculator.html',base=base,days=days,result=result,start=start,end=end,difference=(end-start).days)
+
 def scoped_branch_from_request():
  if not is_admin(): return current_branch_id()
  try:return int(request.values.get('branch_id')) if request.values.get('branch_id') else None
