@@ -243,11 +243,24 @@ def _verification_hash(code):
  return hashlib.sha256(f"{app.config['SECRET_KEY']}:{code}".encode()).hexdigest()
 
 def _send_sms(phone,message):
- """Send through a provider-neutral HTTPS webhook configured in Render."""
+ """Send SMS through SOLAPI, falling back to the legacy HTTPS webhook."""
  if app.config.get('TESTING'):return True
+ api_key=os.environ.get('SOLAPI_API_KEY','').strip(); api_secret=os.environ.get('SOLAPI_API_SECRET','').strip()
+ sender=normalize_phone(os.environ.get('SMS_SENDER',''))
+ if api_key and api_secret and sender:
+  try:
+   from solapi import SolapiMessageService
+   from solapi.model import RequestMessage
+   service=SolapiMessageService(api_key=api_key,api_secret=api_secret)
+   response=service.send(RequestMessage(from_=sender,to=normalize_phone(phone),text=message))
+   count=getattr(getattr(response,'group_info',None),'count',None)
+   return getattr(count,'registered_failed',0)==0
+  except Exception:
+   app.logger.exception('SOLAPI SMS delivery failed')
+   return False
  endpoint=os.environ.get('SMS_WEBHOOK_URL','').strip(); token=os.environ.get('SMS_WEBHOOK_TOKEN','').strip()
  if not endpoint:return False
- payload=json.dumps({'to':phone,'message':message,'sender':os.environ.get('SMS_SENDER','TrustFlow')},ensure_ascii=False).encode()
+ payload=json.dumps({'to':phone,'message':message,'sender':sender or 'TrustFlow'},ensure_ascii=False).encode()
  headers={'Content-Type':'application/json'}
  if token:headers['Authorization']=f'Bearer {token}'
  try:
@@ -1198,14 +1211,21 @@ def sale_new():
   name=request.form.get('customer_name','').strip(); opening=parse_date(request.form.get('opening_date')) or date.today()
   if not name:flash('고객명을 입력해주세요.','error');return redirect(url_for('sale_new'))
   phone=request.form.get('customer_phone','').strip(); customer=Customer.query.filter_by(phone=phone).first() if phone else None
-  if not customer:customer=Customer(name=name,phone=phone,carrier=request.form.get('carrier'),status='개통고객');db.session.add(customer);db.session.flush()
+  sale_branch=(current_branch_id() if not is_admin() else (request.form.get('branch_id') or None))
+  if not customer:customer=Customer(name=name,phone=phone,carrier=request.form.get('carrier'),status='개통고객',company_code=session.get('company_code') or 'trustflow',branch_id=sale_branch);db.session.add(customer);db.session.flush()
   serial=request.form.get('serial_number','').strip(); inv=Inventory.query.filter_by(serial_number=serial).first() if serial else None
+  if inv and inv.status!='보유중':flash(f'이 단말기는 현재 {inv.status} 상태라 개통할 수 없습니다.','error');return redirect(url_for('sale_new'))
   rebate=money(request.form.get('rebate'));verbal=money(request.form.get('verbal_extra'));deduct=money(request.form.get('deduction'));support=money(request.form.get('extra_support'));payback=money(request.form.get('customer_payback'));opening_type=request.form.get('opening_type');sim_type=request.form.get('sim_payment_type','없음');settlement,tax,margin,transfer_fee=calc_settlement(rebate,verbal,deduct,support,payback,opening_type,sim_type)
   plan_due=opening+timedelta(days=183) if request.form.get('next_plan','').strip() else None
   internet_due=parse_date(request.form.get('internet_cancel_due_date'));payback_due=parse_date(request.form.get('payback_due_date'))
-  sale=Sale(customer_name=name,customer_phone=phone,customer_birth=request.form.get('customer_birth'),opening_date=opening,carrier=request.form.get('carrier'),opening_type=opening_type,status='개통완료',manufacturer=(inv.manufacturer if inv else request.form.get('manufacturer')),device=(inv.model if inv else request.form.get('device')),color=(inv.color if inv else request.form.get('color')),storage=(inv.capacity if inv else request.form.get('storage')),serial_number=serial,plan=request.form.get('current_plan'),current_plan=request.form.get('current_plan'),next_plan=request.form.get('next_plan'),plan_change_due_date=plan_due,partner_id=(inv.partner_id if inv else (request.form.get('partner_id') or None)),inventory_id=(inv.id if inv else None),visit_source=request.form.get('visit_source'),branch_id=(current_branch_id() if not is_admin() else (request.form.get('branch_id') or None)),assigned_staff=request.form.get('assigned_staff') or session.get('display_name') or session.get('username'),created_by=session.get('display_name') or session.get('username'),rebate=rebate,verbal_extra=verbal,deduction=deduct,extra_support=support,settlement_amount_v2=settlement,tax_rate=.133,tax_amount=tax,customer_payback=payback,transfer_fee=transfer_fee,sim_payment_type=sim_type,sim_fee=7700,final_margin=margin,settlement=str(settlement),margin=str(margin),internet_carrier=request.form.get('internet_carrier'),internet_subscriber=request.form.get('internet_subscriber'),internet_install_date=parse_date(request.form.get('internet_install_date')),internet_cancel_due_date=internet_due,payback_due_date=payback_due,memo=request.form.get('memo'))
+  sale=Sale(customer_name=name,customer_phone=phone,customer_birth=request.form.get('customer_birth'),opening_date=opening,carrier=request.form.get('carrier'),opening_type=opening_type,status='개통완료',manufacturer=(inv.manufacturer if inv else request.form.get('manufacturer')),device=(inv.model if inv else request.form.get('device')),color=(inv.color if inv else request.form.get('color')),storage=(inv.capacity if inv else request.form.get('storage')),serial_number=serial,plan=request.form.get('current_plan'),current_plan=request.form.get('current_plan'),next_plan=request.form.get('next_plan'),plan_change_due_date=plan_due,partner_id=(inv.partner_id if inv else (request.form.get('partner_id') or None)),inventory_id=(inv.id if inv else None),visit_source=request.form.get('visit_source'),branch_id=sale_branch,assigned_staff=request.form.get('assigned_staff') or session.get('display_name') or session.get('username'),created_by=session.get('display_name') or session.get('username'),rebate=rebate,verbal_extra=verbal,deduction=deduct,extra_support=support,settlement_amount_v2=settlement,tax_rate=.133,tax_amount=tax,customer_payback=payback,transfer_fee=transfer_fee,sim_payment_type=sim_type,sim_fee=7700,final_margin=margin,settlement=str(settlement),margin=str(margin),internet_carrier=request.form.get('internet_carrier'),internet_subscriber=request.form.get('internet_subscriber'),internet_install_date=parse_date(request.form.get('internet_install_date')),internet_cancel_due_date=internet_due,payback_due_date=payback_due,memo=request.form.get('memo'))
   db.session.add(sale);db.session.flush()
-  if inv:inv.status='판매완료';inv.sale_id=sale.id
+  if inv:
+   old_branch=inv.branch_id
+   if sale_branch and old_branch!=int(sale_branch):
+    db.session.add(InventoryMovement(inventory_id=inv.id,action='개통자동이관',from_branch_id=old_branch,to_branch_id=int(sale_branch),from_status=inv.status,to_status='판매완료',processed_by=sale.assigned_staff,memo=f'{name} 개통 · 판매일보 #{sale.id}'))
+    inv.branch_id=int(sale_branch)
+   inv.status='판매완료';inv.sale_id=sale.id
   if plan_due:db.session.add(CustomerTask(customer_id=customer.id,sale_id=sale.id,task_type='요금제 변경',title=f'{name} 요금제 변경',description=f"{request.form.get('current_plan','')} → {request.form.get('next_plan','')}",due_date=plan_due,assigned_staff=sale.assigned_staff,auto_created=True))
   names=request.form.getlist('addon_name[]');rules=request.form.getlist('addon_rule[]')
   for addon_name,rule in zip(names,rules):
