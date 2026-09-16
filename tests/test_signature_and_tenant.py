@@ -129,6 +129,13 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.assertEqual(403,response.status_code)
   with app.app_context():self.assertFalse(User.query.filter_by(company_code='company-a',username='branchless').one().active)
 
+ def test_admin_notification_includes_only_own_company_signup_requests(self):
+  with app.app_context():
+   db.session.add_all([AccountRequest(request_type='회원가입',company_code='company-a',username='a-pending',display_name='A신청자',phone='01011110000',status='대기'),AccountRequest(request_type='회원가입',company_code='company-b',username='b-pending',display_name='B신청자',phone='01022220000',status='대기')]);db.session.commit()
+  self.login_as_a();response=self.client.get('/notifications')
+  self.assertEqual(200,response.status_code);self.assertIn('A신청자'.encode(),response.data);self.assertNotIn('B신청자'.encode(),response.data)
+  self.assertIn(b'>1</b>',response.data)
+
  def test_login_is_limited_after_five_failures(self):
   for _ in range(5):self.client.post('/login',data={'company_code':'company-a','username':'admin-a','password':'wrong'})
   response=self.client.post('/login',data={'company_code':'company-a','username':'admin-a','password':'old-password'})
