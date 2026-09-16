@@ -1714,7 +1714,20 @@ def staff_delete(uid):
 def account_request_complete(request_id):
  item=AccountRequest.query.get_or_404(request_id)
  if item.company_code!=(session.get('company_code') or 'trustflow'): abort(403)
- item.status='완료'; db.session.commit(); flash('비밀번호 재설정 요청을 완료 처리했습니다.','success'); return redirect(url_for('staff'))
+ if item.status!='대기':flash('이미 처리된 요청입니다.','error');return redirect(url_for('staff'))
+ decision=request.form.get('decision','complete')
+ if item.request_type=='회원가입':
+  user=User.query.filter_by(company_code=item.company_code,username=item.username).first()
+  if not user:flash('가입 신청 계정을 찾지 못했습니다.','error');return redirect(url_for('staff'))
+  if decision=='approve':
+   user.active=True;item.status='승인';message='직원 가입을 승인했습니다.'
+  elif decision=='reject':
+   user.active=False;item.status='반려';message='직원 가입을 반려했습니다.'
+  else:flash('승인 또는 반려를 선택해주세요.','error');return redirect(url_for('staff'))
+  audit(f'직원 가입 {item.status}','user',user.id,f'{user.display_name or user.username} ({user.username})')
+ else:
+  item.status='완료';message='비밀번호 재설정 요청을 완료 처리했습니다.'
+ db.session.commit();flash(message,'success');return redirect(url_for('staff'))
 
 @app.route('/audit-logs')
 @login_required
