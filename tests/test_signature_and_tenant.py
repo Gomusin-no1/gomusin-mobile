@@ -105,10 +105,11 @@ class SignatureAndTenantTest(unittest.TestCase):
   with app.app_context():
    user=User(username='pending-staff',password_hash=generate_password_hash('safe-password'),role='staff',display_name='대기직원',company_code='company-a',recovery_phone='01055556666',active=False)
    db.session.add(user);db.session.add(AccountRequest(request_type='회원가입',company_code='company-a',username='pending-staff',display_name='대기직원',phone='01055556666',status='대기'));db.session.commit();request_id=AccountRequest.query.filter_by(username='pending-staff').one().id
-  self.login_as_a();response=self.client.post(f'/account-requests/{request_id}/complete',data={'decision':'approve'},follow_redirects=False)
+  self.login_as_a();response=self.client.post(f'/account-requests/{request_id}/complete',data={'decision':'approve','branch_id':self.a_branch},follow_redirects=False)
   self.assertEqual(302,response.status_code)
   with app.app_context():
-   self.assertTrue(User.query.filter_by(company_code='company-a',username='pending-staff').one().active)
+   approved=User.query.filter_by(company_code='company-a',username='pending-staff').one()
+   self.assertTrue(approved.active);self.assertEqual(self.a_branch,approved.branch_id)
    self.assertEqual('승인',AccountRequest.query.get(request_id).status)
 
  def test_admin_cannot_approve_another_company_signup(self):
@@ -117,6 +118,16 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.login_as_a();response=self.client.post(f'/account-requests/{request_id}/complete',data={'decision':'approve'})
   self.assertEqual(403,response.status_code)
   with app.app_context():self.assertFalse(User.query.execution_options(skip_tenant=True).filter_by(company_code='company-b',username='other-pending').one().active)
+
+ def test_signup_approval_requires_company_branch(self):
+  with app.app_context():
+   db.session.add(User(username='branchless',password_hash='unused',company_code='company-a',active=False));db.session.add(AccountRequest(request_type='회원가입',company_code='company-a',username='branchless',status='대기'));db.session.commit();request_id=AccountRequest.query.filter_by(username='branchless').one().id
+  self.login_as_a()
+  response=self.client.post(f'/account-requests/{request_id}/complete',data={'decision':'approve'},follow_redirects=True)
+  self.assertIn('소속 지점을 선택'.encode(),response.data)
+  response=self.client.post(f'/account-requests/{request_id}/complete',data={'decision':'approve','branch_id':self.b_branch})
+  self.assertEqual(403,response.status_code)
+  with app.app_context():self.assertFalse(User.query.filter_by(company_code='company-a',username='branchless').one().active)
 
  def test_login_is_limited_after_five_failures(self):
   for _ in range(5):self.client.post('/login',data={'company_code':'company-a','username':'admin-a','password':'wrong'})
