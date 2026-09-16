@@ -9,7 +9,7 @@ os.environ['ADMIN_USERNAME']=''
 os.environ['ADMIN_PASSWORD']=''
 
 from werkzeug.security import generate_password_hash, check_password_hash
-from app import app, db, User, Branch, Customer, LOGIN_STORIES, PhoneVerification, _send_sms
+from app import app, db, User, Branch, Customer, Inventory, InventoryMovement, Sale, LOGIN_STORIES, PhoneVerification, _send_sms
 
 
 class SignatureAndTenantTest(unittest.TestCase):
@@ -19,8 +19,9 @@ class SignatureAndTenantTest(unittest.TestCase):
   with app.app_context():
    db.drop_all();db.create_all()
    a=Branch(name='A 본점',code='A99',company_code='company-a')
+   a2=Branch(name='A 2호점',code='A98',company_code='company-a')
    b=Branch(name='B 본점',code='B99',company_code='company-b')
-   db.session.add_all([a,b]);db.session.flush()
+   db.session.add_all([a,a2,b]);db.session.flush()
    db.session.add_all([
     User(username='admin-a',password_hash=generate_password_hash('old-password'),role='admin',display_name='A관리자',company_code='company-a',branch_id=a.id,recovery_phone='01011112222',active=True),
     User(username='admin-b',password_hash='unused',role='admin',display_name='B관리자',company_code='company-b',branch_id=b.id,active=True),
@@ -28,6 +29,7 @@ class SignatureAndTenantTest(unittest.TestCase):
     Customer(name='B 고객',phone='01033334444',company_code='company-b',branch_id=b.id)
    ]);db.session.commit()
    self.a_user=User.query.filter_by(username='admin-a').first().id
+   self.a_branch=a.id;self.a2_branch=a2.id;self.b_branch=b.id
    self.b_customer=Customer.query.filter_by(name='B 고객').first().id
 
  def login_as_a(self):
@@ -100,6 +102,25 @@ class SignatureAndTenantTest(unittest.TestCase):
    finally:app.config['TESTING']=True
   self.assertEqual('01076671100',captured['message'].from_)
   self.assertEqual('01012345678',captured['message'].to)
+
+ def test_sale_normalizes_phone_and_auto_transfers_inventory_between_company_branches(self):
+  with app.app_context():
+   db.session.add(Inventory(serial_number='SERIAL-A',manufacturer='삼성',model='S26',capacity='512GB',color='화이트',branch_id=self.a2_branch,status='보유중'));db.session.commit()
+  self.login_as_a()
+  response=self.client.post('/sales/new',data={'customer_name':'신규 고객','customer_phone':'010-7667-1100','branch_id':str(self.a_branch),'serial_number':'SERIAL-A','carrier':'LG','opening_type':'번호이동','current_plan':'115'},follow_redirects=False)
+  self.assertEqual(302,response.status_code)
+  with app.app_context():
+   sale=Sale.query.filter_by(serial_number='SERIAL-A').one();inventory=Inventory.query.filter_by(serial_number='SERIAL-A').one();movement=InventoryMovement.query.filter_by(inventory_id=inventory.id).one()
+   self.assertEqual('01076671100',sale.customer_phone);self.assertEqual(('S26','512GB','화이트'),(sale.device,sale.storage,sale.color))
+   self.assertEqual(self.a_branch,inventory.branch_id);self.assertEqual('판매완료',inventory.status);self.assertEqual('개통자동이관',movement.action)
+
+ def test_sale_cannot_use_another_company_inventory(self):
+  with app.app_context():
+   db.session.add(Inventory(serial_number='SERIAL-B',manufacturer='삼성',model='S26',branch_id=self.b_branch,status='보유중'));db.session.commit()
+  self.login_as_a()
+  response=self.client.post('/sales/new',data={'customer_name':'차단 고객','customer_phone':'01099998888','branch_id':str(self.a_branch),'serial_number':'SERIAL-B','carrier':'LG','opening_type':'번호이동'})
+  self.assertEqual(403,response.status_code)
+  with app.app_context():self.assertEqual('보유중',Inventory.query.filter_by(serial_number='SERIAL-B').one().status)
 
 
 if __name__=='__main__':unittest.main()
