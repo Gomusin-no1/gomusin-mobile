@@ -1210,10 +1210,17 @@ def sale_new():
  if request.method=='POST':
   name=request.form.get('customer_name','').strip(); opening=parse_date(request.form.get('opening_date')) or date.today()
   if not name:flash('고객명을 입력해주세요.','error');return redirect(url_for('sale_new'))
-  phone=request.form.get('customer_phone','').strip(); customer=Customer.query.filter_by(phone=phone).first() if phone else None
+  phone=normalize_phone(request.form.get('customer_phone','')); customer=Customer.query.filter_by(phone=phone).first() if phone else None
   sale_branch=(current_branch_id() if not is_admin() else (request.form.get('branch_id') or None))
+  if not sale_branch:flash('판매 지점을 선택해주세요.','error');return redirect(url_for('sale_new'))
+  try:sale_branch=int(sale_branch)
+  except:abort(403)
+  enforce_branch(sale_branch)
   if not customer:customer=Customer(name=name,phone=phone,carrier=request.form.get('carrier'),status='개통고객',company_code=session.get('company_code') or 'trustflow',branch_id=sale_branch);db.session.add(customer);db.session.flush()
   serial=request.form.get('serial_number','').strip(); inv=Inventory.query.filter_by(serial_number=serial).first() if serial else None
+  if inv:
+   inventory_branch=Branch.query.execution_options(skip_tenant=True).filter_by(id=inv.branch_id).first()
+   if not inventory_branch or inventory_branch.company_code!=current_company():abort(403)
   if inv and inv.status!='보유중':flash(f'이 단말기는 현재 {inv.status} 상태라 개통할 수 없습니다.','error');return redirect(url_for('sale_new'))
   rebate=money(request.form.get('rebate'));verbal=money(request.form.get('verbal_extra'));deduct=money(request.form.get('deduction'));support=money(request.form.get('extra_support'));payback=money(request.form.get('customer_payback'));opening_type=request.form.get('opening_type');sim_type=request.form.get('sim_payment_type','없음');settlement,tax,margin,transfer_fee=calc_settlement(rebate,verbal,deduct,support,payback,opening_type,sim_type)
   plan_due=opening+timedelta(days=183) if request.form.get('next_plan','').strip() else None
@@ -1222,9 +1229,9 @@ def sale_new():
   db.session.add(sale);db.session.flush()
   if inv:
    old_branch=inv.branch_id
-   if sale_branch and old_branch!=int(sale_branch):
-    db.session.add(InventoryMovement(inventory_id=inv.id,action='개통자동이관',from_branch_id=old_branch,to_branch_id=int(sale_branch),from_status=inv.status,to_status='판매완료',processed_by=sale.assigned_staff,memo=f'{name} 개통 · 판매일보 #{sale.id}'))
-    inv.branch_id=int(sale_branch)
+   if old_branch!=sale_branch:
+    db.session.add(InventoryMovement(inventory_id=inv.id,action='개통자동이관',from_branch_id=old_branch,to_branch_id=sale_branch,from_status=inv.status,to_status='판매완료',processed_by=sale.assigned_staff,memo=f'{name} 개통 · 판매일보 #{sale.id}'))
+    inv.branch_id=sale_branch
    inv.status='판매완료';inv.sale_id=sale.id
   if plan_due:db.session.add(CustomerTask(customer_id=customer.id,sale_id=sale.id,task_type='요금제 변경',title=f'{name} 요금제 변경',description=f"{request.form.get('current_plan','')} → {request.form.get('next_plan','')}",due_date=plan_due,assigned_staff=sale.assigned_staff,auto_created=True))
   names=request.form.getlist('addon_name[]');rules=request.form.getlist('addon_rule[]')
