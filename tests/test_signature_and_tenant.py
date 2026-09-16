@@ -44,6 +44,10 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.assertEqual(200,response.status_code)
   self.assertIn(b'SIGNATURE COLLECTION',response.data)
 
+ def test_date_calculator_treats_leading_zero_as_day_count(self):
+  self.login_as_a();response=self.client.get('/date-calculator?base=2026-09-14&days=0185')
+  self.assertEqual(200,response.status_code);self.assertIn('185일'.encode(),response.data);self.assertIn('2027년 03월 18일'.encode(),response.data)
+
  def test_company_customer_list_is_isolated(self):
   self.login_as_a();response=self.client.get('/customers')
   self.assertEqual(200,response.status_code)
