@@ -718,11 +718,12 @@ def cash_ledger():
  if request.method=='POST':
   bid=current_branch_id() if not is_admin() else (request.form.get('branch_id') or None)
   if not bid: flash('지점을 선택해주세요.','error'); return redirect(url_for('cash_ledger',month=month))
+  enforce_branch(bid)
   direction=request.form.get('direction','입금'); amount=abs(money(request.form.get('amount')))
   if amount<=0: flash('금액을 입력해주세요.','error'); return redirect(url_for('cash_ledger',month=month,branch_id=bid))
   db.session.add(CashLedger(ledger_date=parse_date(request.form.get('ledger_date')) or date.today(),branch_id=int(bid),direction=direction,category=request.form.get('category','기타'),amount=amount,payment_method=request.form.get('payment_method','현금'),counterparty=request.form.get('counterparty'),memo=request.form.get('memo'),created_by=session.get('display_name') or session.get('username')))
   db.session.commit(); flash('시재 내역이 등록되었습니다.','success'); return redirect(url_for('cash_ledger',month=month,branch_id=bid))
- q=CashLedger.query.filter(CashLedger.ledger_date>=start,CashLedger.ledger_date<end)
+ q=apply_branch_scope(CashLedger.query,CashLedger).filter(CashLedger.ledger_date>=start,CashLedger.ledger_date<end)
  if branch_id:q=q.filter_by(branch_id=branch_id)
  elif not is_admin():q=q.filter(CashLedger.id==-1)
  items=q.order_by(CashLedger.ledger_date.desc(),CashLedger.id.desc()).all(); branch_map={b.id:b for b in Branch.query.all()}
@@ -737,7 +738,7 @@ def cash_ledger_export():
  month=request.args.get('month') or date.today().strftime('%Y-%m'); branch_id=scoped_branch_from_request()
  try:y,m=map(int,month.split('-')); start=date(y,m,1); end=add_months(start,1)
  except:abort(400)
- q=CashLedger.query.filter(CashLedger.ledger_date>=start,CashLedger.ledger_date<end)
+ q=apply_branch_scope(CashLedger.query,CashLedger).filter(CashLedger.ledger_date>=start,CashLedger.ledger_date<end)
  if branch_id:q=q.filter_by(branch_id=branch_id)
  elif not is_admin():q=q.filter(CashLedger.id==-1)
  items=q.order_by(CashLedger.ledger_date,CashLedger.id).all(); branches={b.id:b.name for b in Branch.query.all()}
@@ -771,10 +772,11 @@ def card_sales():
   if not bid or not terminal:flash('지점과 카드단말기 등록번호를 입력해주세요.','error')
   elif CardTerminal.query.filter_by(terminal_number=terminal).first():flash('이미 등록된 단말기 번호입니다.','error')
   else:
+   enforce_branch(bid)
    token=secrets.token_urlsafe(32);db.session.add(CardTerminal(branch_id=int(bid),provider=request.form.get('provider'),merchant_number=request.form.get('merchant_number'),terminal_number=terminal,api_token=token,memo=request.form.get('memo')));db.session.commit();flash(f'단말기 등록 완료 · 연동키: {token} (VAN사에 1회 전달)','success')
   return redirect(url_for('card_sales',branch_id=bid or ''))
- tq=CardTerminal.query
- txq=CardTransaction.query
+ tq=apply_branch_scope(CardTerminal.query,CardTerminal)
+ txq=apply_branch_scope(CardTransaction.query,CardTransaction)
  if branch_id:tq=tq.filter_by(branch_id=branch_id);txq=txq.filter_by(branch_id=branch_id)
  elif not is_admin():tq=tq.filter(CardTerminal.id==-1);txq=txq.filter(CardTransaction.id==-1)
  terminals=tq.order_by(CardTerminal.id.desc()).all(); transactions=txq.order_by(CardTransaction.paid_at.desc()).limit(300).all()
@@ -805,7 +807,7 @@ def ob_management():
  for s in sq:
   key=normalize_phone(s.customer_phone)
   if key and (key not in latest or s.opening_date>latest[key].opening_date):latest[key]=s
- customers={normalize_phone(c.phone):c for c in Customer.query.filter(Customer.phone.in_(list(latest.keys()) or ['__none__'])).all()}; logs=ContactLog.query
+ customers={normalize_phone(c.phone):c for c in Customer.query.filter(Customer.phone.in_(list(latest.keys()) or ['__none__'])).all()}; logs=apply_branch_scope(ContactLog.query,ContactLog)
  if not is_admin():logs=logs.filter_by(branch_id=current_branch_id())
  last_logs={}
  for x in logs.order_by(ContactLog.contacted_at.desc()).all():last_logs.setdefault(x.customer_id,x)
@@ -830,9 +832,11 @@ def legal_cases():
   bid=current_branch_id() if not is_admin() else request.form.get('branch_id'); cid=request.form.get('customer_id')
   if not bid or not cid:flash('고객과 담당지점을 선택해주세요.','error')
   else:
+   enforce_branch(bid);customer=Customer.query.get_or_404(int(cid))
+   if not customer_allowed(customer):abort(403)
    db.session.add(LegalCase(customer_id=int(cid),branch_id=int(bid),case_type=request.form.get('case_type','환수'),claim_amount=money(request.form.get('claim_amount')),incident_date=parse_date(request.form.get('incident_date')),reason=request.form.get('reason'),evidence=request.form.get('evidence'),debtor_address=request.form.get('debtor_address'),demand_due_date=parse_date(request.form.get('demand_due_date')),status='자료수집',assigned_staff=request.form.get('assigned_staff') or session.get('display_name'),created_by=session.get('display_name') or session.get('username')));db.session.commit();flash('환수 법률업무가 등록되었습니다.','success')
   return redirect(url_for('legal_cases',branch_id=bid or ''))
- q=LegalCase.query
+ q=apply_branch_scope(LegalCase.query,LegalCase)
  if branch_id:q=q.filter_by(branch_id=branch_id)
  elif not is_admin():q=q.filter(LegalCase.id==-1)
  items=q.order_by(LegalCase.created_at.desc()).all(); customer_map={c.id:c for c in Customer.query.filter(Customer.id.in_([x.customer_id for x in items] or [0])).all()}
@@ -1389,7 +1393,7 @@ def document_delete(did):
 @login_required
 @admin_required
 def sale_delete(sid):
- s=Sale.query.get_or_404(sid)
+ s=Sale.query.get_or_404(sid);enforce_branch(s.branch_id)
  inv=Inventory.query.filter_by(sale_id=s.id).first()
  if inv:
   old_status=inv.status; inv.status='보유중'; inv.sale_id=None
@@ -1404,7 +1408,7 @@ def sale_delete(sid):
 @login_required
 def paybacks():
  status=request.args.get('status','').strip(); due=request.args.get('due','').strip(); branch_id=request.args.get('branch_id','').strip()
- query=Payback.query.join(Sale,Payback.sale_id==Sale.id)
+ query=payback_query_scoped()
  if not is_admin():
   branch_id=str(current_branch_id() or ''); query=query.filter(Sale.branch_id==current_branch_id()) if current_branch_id() else query.filter(Payback.id==-1)
  elif branch_id:
@@ -1512,7 +1516,7 @@ def payback_reopen(pid):
 @login_required
 def wired_sales():
  q=request.args.get('q','').strip(); status=request.args.get('status','').strip(); branch_id=request.args.get('branch_id','').strip()
- query=WiredSale.query
+ query=apply_branch_scope(WiredSale.query,WiredSale)
  if not is_admin():
   branch_id=str(current_branch_id() or ''); query=query.filter(WiredSale.branch_id==current_branch_id()) if current_branch_id() else query.filter(WiredSale.id==-1)
  elif branch_id:
@@ -1561,7 +1565,8 @@ def wired_sale_new():
   if not item.customer_name:
    flash('고객명을 입력해주세요.','error')
    return render_template('wired_sale_form.html',item=None,branches=branches,staff=staff,today=date.today().isoformat(),wired_product_data=wired_product_data)
-  db.session.add(item); db.session.commit()
+  if not item.branch_id:flash('담당 지점을 선택해주세요.','error');return render_template('wired_sale_form.html',item=None,branches=branches,staff=staff,today=date.today().isoformat(),wired_product_data=wired_product_data)
+  enforce_branch(item.branch_id);db.session.add(item); db.session.commit()
   flash('유선판매 내역이 등록되었습니다.','success'); return redirect(url_for('wired_sales'))
  return render_template('wired_sale_form.html',item=None,branches=branches,staff=staff,today=date.today().isoformat(),wired_product_data=wired_product_data)
 
@@ -1579,7 +1584,9 @@ def wired_sale_edit(wid):
   item.customer_name=request.form.get('customer_name','').strip() or item.customer_name
   item.customer_phone=request.form.get('customer_phone','').strip()
   item.subscriber_name=request.form.get('subscriber_name','').strip()
-  item.branch_id=request.form.get('branch_id') or None
+  new_branch=current_branch_id() if not is_admin() else (request.form.get('branch_id') or None)
+  if not new_branch:flash('담당 지점을 선택해주세요.','error');return redirect(url_for('wired_sale_edit',wid=wid))
+  enforce_branch(new_branch);item.branch_id=int(new_branch)
   item.assigned_staff=request.form.get('assigned_staff')
   item.carrier=request.form.get('carrier')
   item.business_type=request.form.get('business_type','유선판매')
