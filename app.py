@@ -1720,7 +1720,12 @@ def account_request_complete(request_id):
   user=User.query.filter_by(company_code=item.company_code,username=item.username).first()
   if not user:flash('가입 신청 계정을 찾지 못했습니다.','error');return redirect(url_for('staff'))
   if decision=='approve':
-   user.active=True;item.status='승인';message='직원 가입을 승인했습니다.'
+   branch_id=request.form.get('branch_id','').strip()
+   try:branch_id=int(branch_id)
+   except:flash('승인할 직원의 소속 지점을 선택해주세요.','error');return redirect(url_for('staff'))
+   branch=Branch.query.filter_by(id=branch_id,company_code=item.company_code,active=True).first()
+   if not branch:abort(403)
+   user.branch_id=branch.id;user.active=True;item.status='승인';message=f'{branch.name} 직원으로 가입을 승인했습니다.'
   elif decision=='reject':
    user.active=False;item.status='반려';message='직원 가입을 반려했습니다.'
   else:flash('승인 또는 반려를 선택해주세요.','error');return redirect(url_for('staff'))
