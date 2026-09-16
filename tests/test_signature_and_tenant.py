@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -47,6 +48,19 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.assertEqual(200,response.status_code)
   self.assertIn('A 고객'.encode(),response.data)
   self.assertNotIn('B 고객'.encode(),response.data)
+
+ def test_admin_sales_and_inventory_lists_are_company_isolated(self):
+  with app.app_context():
+   db.session.add_all([
+    Sale(customer_name='A 판매고객',customer_phone='01011112222',opening_date=date.today(),device='A전용단말',serial_number='A-SERIAL',branch_id=self.a_branch),
+    Sale(customer_name='B 비공개판매',customer_phone='01033334444',opening_date=date.today(),device='B전용단말',serial_number='B-SERIAL',branch_id=self.b_branch),
+    Inventory(serial_number='A-STOCK',model='A재고모델',branch_id=self.a_branch,status='보유중'),
+    Inventory(serial_number='B-STOCK',model='B비공개재고',branch_id=self.b_branch,status='보유중')
+   ]);db.session.commit()
+  self.login_as_a()
+  sales=self.client.get('/sales');stock=self.client.get('/inventory')
+  self.assertIn('A 판매고객'.encode(),sales.data);self.assertNotIn('B 비공개판매'.encode(),sales.data)
+  self.assertIn(b'A-STOCK',stock.data);self.assertNotIn(b'B-STOCK',stock.data)
 
  def test_direct_cross_company_customer_access_is_blocked(self):
   self.login_as_a();response=self.client.get(f'/customers/{self.b_customer}')
