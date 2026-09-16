@@ -338,7 +338,10 @@ def tenant_read_filter(execute_state):
  company=current_company()
  execute_state.statement=execute_state.statement.options(
   with_loader_criteria(Branch,lambda row:row.company_code==company,include_aliases=True),
-  with_loader_criteria(Customer,lambda row:row.company_code==company,include_aliases=True)
+  with_loader_criteria(Customer,lambda row:row.company_code==company,include_aliases=True),
+  with_loader_criteria(User,lambda row:row.company_code==company,include_aliases=True),
+  with_loader_criteria(AccountRequest,lambda row:row.company_code==company,include_aliases=True),
+  with_loader_criteria(AuditLog,lambda row:row.company_code==company,include_aliases=True)
  )
 
 @event.listens_for(OrmSession,'before_flush')
