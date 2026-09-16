@@ -936,7 +936,7 @@ def customers():
  query=customer_query_scoped()
  if q:
   phone_q=normalize_phone(q); query=query.filter(or_(Customer.name.ilike(f'%{q}%'),Customer.phone.ilike(f'%{phone_q or q}%'),Customer.address_road.ilike(f'%{q}%'),Customer.address_jibun.ilike(f'%{q}%'),Customer.address_detail.ilike(f'%{q}%')))
- sale_scope=Sale.query
+ sale_scope=apply_branch_scope(Sale.query,Sale)
  if branch_id:
   try:sale_scope=sale_scope.filter(Sale.branch_id==int(branch_id))
   except:pass
@@ -950,7 +950,7 @@ def customers():
  customers_list=query.order_by(Customer.created_at.desc()).all()
  sale_map={}
  for c in customers_list:
-  sq=Sale.query.filter_by(customer_phone=c.phone) if c.phone else Sale.query.filter(Sale.id==-1)
+  sq=apply_branch_scope(Sale.query,Sale).filter_by(customer_phone=c.phone) if c.phone else Sale.query.filter(Sale.id==-1)
   if branch_id:
    try:sq=sq.filter(Sale.branch_id==int(branch_id))
    except:pass
@@ -958,7 +958,7 @@ def customers():
    try:sq=sq.filter(Sale.opening_date>=mstart,Sale.opening_date<mend)
    except:pass
   sale_map[c.id]=sq.order_by(Sale.opening_date.desc(),Sale.id.desc()).first()
- months=[r[0].strftime('%Y-%m') for r in db.session.query(Sale.opening_date).filter(Sale.opening_date.isnot(None)).order_by(Sale.opening_date.desc()).all()]
+ months=[r[0].strftime('%Y-%m') for r in apply_branch_scope(db.session.query(Sale.opening_date),Sale).filter(Sale.opening_date.isnot(None)).order_by(Sale.opening_date.desc()).all()]
  months=list(dict.fromkeys(months))
  return render_template('customers.html',customers=customers_list,q=q,month=month,months=months,branches=Branch.query.filter_by(active=True).all(),branch_id=branch_id,sale_map=sale_map)
 
@@ -1027,7 +1027,7 @@ def customer_delete(cid):
 @login_required
 def inventory():
  q=request.args.get('q','').strip(); status=request.args.get('status','').strip(); branch_id=request.args.get('branch_id','').strip()
- query=Inventory.query
+ query=apply_branch_scope(Inventory.query,Inventory)
  if not is_admin():
   branch_id=str(current_branch_id() or ''); query=query.filter(Inventory.branch_id==current_branch_id()) if current_branch_id() else query.filter(Inventory.id==-1)
  elif branch_id:
@@ -1336,7 +1336,7 @@ def sale_edit(sid):
 @login_required
 def sales():
  q=request.args.get('q','').strip(); day=request.args.get('date','').strip(); branch_id=request.args.get('branch_id','').strip()
- query=Sale.query
+ query=apply_branch_scope(Sale.query,Sale)
  if not is_admin():
   branch_id=str(current_branch_id() or ''); query=query.filter(Sale.branch_id==current_branch_id()) if current_branch_id() else query.filter(Sale.id==-1)
  elif branch_id:
