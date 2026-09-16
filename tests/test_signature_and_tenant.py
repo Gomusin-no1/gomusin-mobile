@@ -105,7 +105,10 @@ class SignatureAndTenantTest(unittest.TestCase):
   with app.app_context():
    user=User(username='pending-staff',password_hash=generate_password_hash('safe-password'),role='staff',display_name='대기직원',company_code='company-a',recovery_phone='01055556666',active=False)
    db.session.add(user);db.session.add(AccountRequest(request_type='회원가입',company_code='company-a',username='pending-staff',display_name='대기직원',phone='01055556666',status='대기'));db.session.commit();request_id=AccountRequest.query.filter_by(username='pending-staff').one().id
-  self.login_as_a();response=self.client.post(f'/account-requests/{request_id}/complete',data={'decision':'approve','branch_id':self.a_branch},follow_redirects=False)
+  self.login_as_a()
+  with patch('app._send_sms',return_value=True) as sms:
+   response=self.client.post(f'/account-requests/{request_id}/complete',data={'decision':'approve','branch_id':self.a_branch},follow_redirects=False)
+   sms.assert_called_once();self.assertEqual('01055556666',sms.call_args.args[0]);self.assertIn('가입이 승인',sms.call_args.args[1])
   self.assertEqual(302,response.status_code)
   with app.app_context():
    approved=User.query.filter_by(company_code='company-a',username='pending-staff').one()
