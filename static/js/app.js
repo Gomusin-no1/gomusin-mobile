@@ -17,3 +17,13 @@ document.addEventListener('keydown',e=>{
     if(input){e.preventDefault();input.focus();input.select()}
   }
 });
+
+// Keep the sidebar compact: only one work category is expanded at a time.
+document.querySelectorAll('.unified-nav .nav-section').forEach(section=>{
+  section.addEventListener('toggle',()=>{
+    if(!section.open)return;
+    document.querySelectorAll('.unified-nav .nav-section').forEach(other=>{
+      if(other!==section)other.open=false;
+    });
+  });
+});
