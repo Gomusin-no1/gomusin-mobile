@@ -25,6 +25,13 @@ app.config.update(
 )
 db=SQLAlchemy(app)
 
+@app.after_request
+def security_headers(response):
+ response.headers.setdefault('X-Content-Type-Options','nosniff');response.headers.setdefault('X-Frame-Options','DENY')
+ response.headers.setdefault('Referrer-Policy','strict-origin-when-cross-origin');response.headers.setdefault('Permissions-Policy','camera=(), microphone=(), geolocation=()')
+ if request.is_secure:response.headers.setdefault('Strict-Transport-Security','max-age=31536000; includeSubDomains')
+ return response
+
 LOGIN_STORIES=[
  ('TRUST IN MOTION','신뢰가 흐르면,','업무는 더 정확해집니다.','고객과의 첫 약속부터 사후관리까지 놓치지 않는 하나의 업무 흐름.',['약속 관리','정확한 기록','안전한 업무']),
  ('CONNECTED GROWTH','연결된 데이터가,','매장의 성장을 만듭니다.','흩어진 고객·판매·재고 정보를 한곳에서 빠르고 분명하게 관리하세요.',['고객 연결','실시간 현황','성장 데이터']),
@@ -53,12 +60,13 @@ def login_story():
  return {'image':f'images/login/hero-{index+1:02d}.webp','kicker':kicker,'title_a':title_a,'title_b':title_b,'body':body,'tags':tags}
 
 class User(db.Model):
- id=db.Column(db.Integer,primary_key=True); username=db.Column(db.String(50),unique=True,nullable=False,index=True)
+ id=db.Column(db.Integer,primary_key=True); username=db.Column(db.String(50),nullable=False,index=True)
  password_hash=db.Column(db.String(255),nullable=False); role=db.Column(db.String(20),nullable=False,default='staff')
  display_name=db.Column(db.String(50)); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id')); active=db.Column(db.Boolean,default=True,nullable=False)
  company_code=db.Column(db.String(50),default='trustflow',nullable=False,index=True); recovery_phone=db.Column(db.String(30))
  can_approve_payback=db.Column(db.Boolean,default=False,nullable=False,index=True)
  created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
+ __table_args__=(db.UniqueConstraint('company_code','username',name='uq_user_company_username'),)
 
 class AccountRequest(db.Model):
  id=db.Column(db.Integer,primary_key=True); request_type=db.Column(db.String(20),nullable=False)
@@ -248,7 +256,8 @@ def _send_sms(phone,message):
  except Exception:return False
 
 def issue_phone_code(purpose,company,phone):
- now=datetime.utcnow(); recent=PhoneVerification.query.filter_by(purpose=purpose,company_code=company,phone=phone).filter(PhoneVerification.created_at>now-timedelta(minutes=1)).first()
+ now=datetime.utcnow(); PhoneVerification.query.filter(PhoneVerification.expires_at<now-timedelta(days=1)).delete(synchronize_session=False);db.session.commit()
+ recent=PhoneVerification.query.filter_by(purpose=purpose,company_code=company,phone=phone).filter(PhoneVerification.created_at>now-timedelta(minutes=1)).first()
  if recent:return False,'인증번호는 1분 후 다시 요청할 수 있습니다.'
  code=os.environ.get('SMS_TEST_CODE','123456') if app.config.get('TESTING') else f'{secrets.randbelow(1000000):06d}'
  item=PhoneVerification(purpose=purpose,company_code=company,phone=phone,code_hash=_verification_hash(code),expires_at=now+timedelta(minutes=5))
@@ -554,7 +563,15 @@ def seed_masters():
  db.session.commit()
 
 def prepare_database():
- db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale(); seed_branches(); seed_masters()
+ db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale()
+ if db.engine.dialect.name=='postgresql':
+  try:
+   names={x.get('name') for x in db.inspect(db.engine).get_unique_constraints('user')}
+   if 'uq_user_company_username' not in names:
+    db.session.execute(text('ALTER TABLE "user" DROP CONSTRAINT IF EXISTS user_username_key'))
+    db.session.execute(text('ALTER TABLE "user" ADD CONSTRAINT uq_user_company_username UNIQUE (company_code, username)'));db.session.commit()
+  except Exception:db.session.rollback()
+ seed_branches(); seed_masters()
 
 def sync_admin():
  prepare_database(); u=os.environ.get('ADMIN_USERNAME','').strip(); p=os.environ.get('ADMIN_PASSWORD',''); company_code=os.environ.get('COMPANY_LOGIN_ID','trustflow').strip().lower() or 'trustflow'
@@ -612,8 +629,9 @@ def signup():
  if request.method=='POST':
   company=request.form.get('company_code','').strip().lower(); username=request.form.get('username','').strip(); name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('phone','')); password=request.form.get('password','')
   if not all([company,username,name,phone,password]): flash('모든 항목을 입력해주세요.','error')
+  elif len(phone)!=11 or not phone.startswith('010'): flash('휴대전화 번호를 010부터 숫자 11자리로 입력해주세요.','error')
   elif not User.query.filter_by(company_code=company).first(): flash('등록되지 않은 회사 전체아이디입니다.','error')
-  elif User.query.filter_by(username=username).first(): flash('이미 사용 중인 개인아이디입니다.','error')
+  elif User.query.filter_by(company_code=company,username=username).first(): flash('이 회사에서 이미 사용 중인 개인아이디입니다.','error')
   else:
    db.session.add(User(username=username,password_hash=generate_password_hash(password),role='staff',display_name=name,company_code=company,recovery_phone=phone,active=False)); db.session.commit(); flash('가입 신청이 완료됐습니다. 회사 관리자의 승인을 기다려주세요.','success'); return redirect(url_for('login'))
  return render_template('signup.html')
@@ -1595,8 +1613,8 @@ def staff():
   u=request.form.get('username','').strip(); pw=request.form.get('password',''); role=request.form.get('role','staff'); display_name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('recovery_phone','')); branch_id=request.form.get('branch_id') or None; company=session.get('company_code') or 'trustflow'
   if not u or not pw or not display_name:
    flash('직원명, 로그인 아이디, 비밀번호를 모두 입력해주세요.','error')
-  elif User.query.filter_by(username=u).first():
-   flash('이미 사용 중인 로그인 아이디입니다.','error')
+  elif User.query.filter_by(company_code=company,username=u).first():
+   flash('이 회사에서 이미 사용 중인 로그인 아이디입니다.','error')
   else:
    db.session.add(User(username=u,password_hash=generate_password_hash(pw),role=role,display_name=display_name,branch_id=branch_id,company_code=company,recovery_phone=phone,active=True)); db.session.commit(); flash('직원이 등록되었습니다.','success')
   return redirect(url_for('staff'))

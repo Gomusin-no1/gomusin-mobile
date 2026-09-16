@@ -76,5 +76,11 @@ class SignatureAndTenantTest(unittest.TestCase):
   response=self.client.post('/login',data={'company_code':'company-a','username':'admin-a','password':'old-password'})
   self.assertEqual(429,response.status_code)
 
+ def test_same_personal_id_can_exist_in_different_companies(self):
+  with app.app_context():
+   db.session.add(User(username='shared-id',password_hash=generate_password_hash('password-a'),company_code='company-a',active=True))
+   db.session.add(User(username='shared-id',password_hash=generate_password_hash('password-b'),company_code='company-b',active=True));db.session.commit()
+   self.assertEqual(2,User.query.execution_options(skip_tenant=True).filter_by(username='shared-id').count())
+
 
 if __name__=='__main__':unittest.main()
