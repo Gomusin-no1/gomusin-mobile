@@ -1,12 +1,15 @@
 import os
+import sys
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 os.environ['DATABASE_URL']='sqlite:///:memory:'
 os.environ['ADMIN_USERNAME']=''
 os.environ['ADMIN_PASSWORD']=''
 
 from werkzeug.security import generate_password_hash, check_password_hash
-from app import app, db, User, Branch, Customer, LOGIN_STORIES, PhoneVerification
+from app import app, db, User, Branch, Customer, LOGIN_STORIES, PhoneVerification, _send_sms
 
 
 class SignatureAndTenantTest(unittest.TestCase):
@@ -81,6 +84,22 @@ class SignatureAndTenantTest(unittest.TestCase):
    db.session.add(User(username='shared-id',password_hash=generate_password_hash('password-a'),company_code='company-a',active=True))
    db.session.add(User(username='shared-id',password_hash=generate_password_hash('password-b'),company_code='company-b',active=True));db.session.commit()
    self.assertEqual(2,User.query.execution_options(skip_tenant=True).filter_by(username='shared-id').count())
+
+ def test_solapi_sms_uses_registered_sender_and_normalized_numbers(self):
+  captured={}
+  class FakeService:
+   def __init__(self,api_key,api_secret):captured.update(api_key=api_key,api_secret=api_secret)
+   def send(self,message):captured['message']=message;return SimpleNamespace(group_info=SimpleNamespace(count=SimpleNamespace(registered_failed=0)))
+  class FakeMessage:
+   def __init__(self,**kwargs):self.__dict__.update(kwargs)
+  fake_solapi=SimpleNamespace(SolapiMessageService=FakeService)
+  fake_model=SimpleNamespace(RequestMessage=FakeMessage)
+  with patch.dict(os.environ,{'SOLAPI_API_KEY':'key','SOLAPI_API_SECRET':'secret','SMS_SENDER':'010-7667-1100'},clear=False), patch.dict(sys.modules,{'solapi':fake_solapi,'solapi.model':fake_model}):
+   app.config['TESTING']=False
+   try:self.assertTrue(_send_sms('010-1234-5678','인증번호 테스트'))
+   finally:app.config['TESTING']=True
+  self.assertEqual('01076671100',captured['message'].from_)
+  self.assertEqual('01012345678',captured['message'].to)
 
 
 if __name__=='__main__':unittest.main()
