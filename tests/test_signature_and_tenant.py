@@ -1,4 +1,5 @@
 import os
+import io
 import sys
 import unittest
 from datetime import date
@@ -75,6 +76,15 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.login_as_a();wired=self.client.get('/wired-sales');ledger=self.client.get('/cash-ledger')
   self.assertIn('A 유선고객'.encode(),wired.data);self.assertNotIn('B 비공개유선'.encode(),wired.data)
   self.assertIn('A시재'.encode(),ledger.data);self.assertNotIn('B비공개시재'.encode(),ledger.data)
+
+ def test_admin_backup_excludes_other_company_records(self):
+  from openpyxl import load_workbook
+  with app.app_context():
+   db.session.add_all([Sale(customer_name='A 백업고객',opening_date=date.today(),branch_id=self.a_branch),Sale(customer_name='B 백업비공개',opening_date=date.today(),branch_id=self.b_branch),Inventory(serial_number='A-BACKUP',model='A모델',branch_id=self.a_branch),Inventory(serial_number='B-BACKUP',model='B모델',branch_id=self.b_branch)]);db.session.commit()
+  self.login_as_a();response=self.client.get('/admin/backup.xlsx')
+  self.assertEqual(200,response.status_code);book=load_workbook(io.BytesIO(response.data),read_only=True)
+  sales=' '.join(str(cell or '') for row in book['판매일보'].iter_rows(values_only=True) for cell in row);stock=' '.join(str(cell or '') for row in book['재고'].iter_rows(values_only=True) for cell in row)
+  self.assertIn('A 백업고객',sales);self.assertNotIn('B 백업비공개',sales);self.assertIn('A-BACKUP',stock);self.assertNotIn('B-BACKUP',stock)
 
  def test_direct_cross_company_customer_access_is_blocked(self):
   self.login_as_a();response=self.client.get(f'/customers/{self.b_customer}')
