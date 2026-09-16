@@ -269,7 +269,11 @@ def _send_sms(phone,message):
  except Exception:return False
 
 def issue_phone_code(purpose,company,phone):
+ company=(company or '').strip().lower();phone=normalize_phone(phone)
+ if len(phone)!=11 or not phone.startswith('010'):return False,'휴대전화 번호를 010부터 숫자 11자리로 입력해주세요.'
  now=datetime.utcnow(); PhoneVerification.query.filter(PhoneVerification.expires_at<now-timedelta(days=1)).delete(synchronize_session=False);db.session.commit()
+ hourly=PhoneVerification.query.filter_by(company_code=company,phone=phone).filter(PhoneVerification.created_at>now-timedelta(hours=1)).count()
+ if hourly>=5:return False,'인증번호 요청이 많습니다. 1시간 후 다시 시도해주세요.'
  recent=PhoneVerification.query.filter_by(purpose=purpose,company_code=company,phone=phone).filter(PhoneVerification.created_at>now-timedelta(minutes=1)).first()
  if recent:return False,'인증번호는 1분 후 다시 요청할 수 있습니다.'
  code=os.environ.get('SMS_TEST_CODE','123456') if app.config.get('TESTING') else f'{secrets.randbelow(1000000):06d}'
@@ -280,6 +284,7 @@ def issue_phone_code(purpose,company,phone):
  return True,'인증번호를 문자로 보냈습니다. 5분 안에 입력해주세요.'
 
 def verify_phone_code(purpose,company,phone,code):
+ company=(company or '').strip().lower();phone=normalize_phone(phone)
  item=PhoneVerification.query.filter_by(purpose=purpose,company_code=company,phone=phone).order_by(PhoneVerification.id.desc()).first(); now=datetime.utcnow()
  if not item or item.verified_at or item.expires_at<now:return False,'인증번호가 만료됐습니다. 다시 받아주세요.'
  if item.attempts>=5:return False,'입력 횟수를 초과했습니다. 새 인증번호를 받아주세요.'
@@ -657,7 +662,7 @@ def find_id():
   user=User.query.filter_by(company_code=company,display_name=name,recovery_phone=phone).first()
   if action=='send':
    if user:
-    ok,message=issue_phone_code('find_id',company,phone); flash(message,'success' if ok else 'error'); verification_sent=ok
+    ok,message=issue_phone_code('find_id',company,phone); flash(message,'success' if ok else 'error'); verification_sent=ok or bool(PhoneVerification.query.filter_by(purpose='find_id',company_code=company,phone=phone).filter(PhoneVerification.expires_at>datetime.utcnow(),PhoneVerification.verified_at.is_(None)).first())
    else:flash('입력한 정보와 일치하는 계정을 찾지 못했습니다.','error')
   elif action=='verify' and user:
    ok,message=verify_phone_code('find_id',company,phone,request.form.get('code'))
@@ -674,7 +679,7 @@ def password_help():
   user=User.query.filter_by(company_code=company,username=username,display_name=name,recovery_phone=phone).first()
   if action=='send':
    if user:
-    ok,message=issue_phone_code('password_reset',company,phone);flash(message,'success' if ok else 'error');verification_sent=ok
+    ok,message=issue_phone_code('password_reset',company,phone);flash(message,'success' if ok else 'error');verification_sent=ok or bool(PhoneVerification.query.filter_by(purpose='password_reset',company_code=company,phone=phone).filter(PhoneVerification.expires_at>datetime.utcnow(),PhoneVerification.verified_at.is_(None)).first())
    else:flash('입력한 정보와 일치하는 계정을 찾지 못했습니다.','error')
   elif action=='reset' and user:
    ok,message=verify_phone_code('password_reset',company,phone,request.form.get('code')); password=request.form.get('new_password','')
