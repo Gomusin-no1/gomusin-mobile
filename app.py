@@ -432,7 +432,18 @@ def audit(action,target_type='',target_id='',detail='',branch_id=None,commit=Fal
 def login_required(fn):
  @wraps(fn)
  def wrapped(*a,**kw):
-  if not session.get('user_id'):return redirect(url_for('login'))
+  uid=session.get('user_id')
+  if not uid:return redirect(url_for('login'))
+  user=User.query.execution_options(skip_tenant=True).filter_by(id=uid).first()
+  session_company=(session.get('company_code') or '').strip().lower()
+  if not user or not user.active or not session_company or user.company_code.strip().lower()!=session_company:
+   session.clear();flash('계정 상태가 변경되어 다시 로그인해주세요.','error');return redirect(url_for('login'))
+  # Refresh authorization data on every request so role/branch changes apply immediately.
+  session['username']=user.username
+  session['display_name']=user.display_name or user.username
+  session['role']=user.role
+  session['branch_id']=user.branch_id
+  session['company_code']=user.company_code.strip().lower()
   return fn(*a,**kw)
  return wrapped
 
