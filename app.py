@@ -1099,6 +1099,18 @@ def sms_campaigns():
   grouped=dict(db.session.query(SmsCampaignRecipient.status,db.func.count(SmsCampaignRecipient.id)).filter_by(campaign_id=item.id).group_by(SmsCampaignRecipient.status).all());stats[item.id]={'total':sum(grouped.values()),**grouped}
  return render_template('sms_campaigns.html',campaigns=rows,stats=stats,sms_ready=bool(os.environ.get('SMS_OPT_OUT_NUMBER','').strip() and os.environ.get('SMS_SENDER','').strip()))
 
+@app.post('/sms-campaigns/run-now')
+@login_required
+@admin_required
+def sms_campaign_run_now():
+ if not os.environ.get('SMS_SENDER','').strip() or not os.environ.get('SMS_OPT_OUT_NUMBER','').strip():
+  flash('발송번호와 무료 수신거부번호를 설정한 뒤 실행해주세요.','error');return redirect(url_for('sms_campaigns'))
+ result=run_sms_campaigns()
+ if result.get('skipped')=='outside_hours':flash('광고 문자는 08:00~21:00에만 발송할 수 있습니다.','error')
+ else:flash(f"문자 발송 실행 완료: 성공 {result.get('sent',0)}건 · 실패 {result.get('failed',0)}건",'success')
+ audit('문자캠페인 수동실행','SmsCampaign','all',f"성공 {result.get('sent',0)}건 · 실패 {result.get('failed',0)}건",commit=True)
+ return redirect(url_for('sms_campaigns'))
+
 @app.route('/sms-campaigns/new',methods=['GET','POST'])
 @login_required
 @admin_required
