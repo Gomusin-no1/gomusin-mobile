@@ -778,6 +778,56 @@ def scoped_branch_from_request():
  try:return int(request.values.get('branch_id')) if request.values.get('branch_id') else None
  except:return None
 
+def sales_performance_data(month,branch_id=None):
+ try:y,m=map(int,month.split('-'));start=date(y,m,1);end=add_months(start,1)
+ except:
+  start=date(date.today().year,date.today().month,1);end=add_months(start,1);month=start.strftime('%Y-%m')
+ mobile_q=apply_branch_scope(Sale.query,Sale).filter(Sale.opening_date>=start,Sale.opening_date<end)
+ wired_q=apply_branch_scope(WiredSale.query,WiredSale).filter(WiredSale.sale_date>=start,WiredSale.sale_date<end)
+ if branch_id:
+  mobile_q=mobile_q.filter(Sale.branch_id==branch_id);wired_q=wired_q.filter(WiredSale.branch_id==branch_id)
+ mobile=mobile_q.all();wired=wired_q.all();branch_names={b.id:b.name for b in Branch.query.order_by(Branch.id).all()}
+ def blank(label):return {'label':label,'mobile_count':0,'wired_count':0,'settlement':0,'margin':0}
+ branch_rows={};staff_rows={}
+ combined=[(x,'mobile',x.settlement_amount_v2 or money(x.settlement)) for x in mobile]+[(x,'wired',x.settlement_amount or 0) for x in wired]
+ for item,kind,settlement in combined:
+  branch=branch_rows.setdefault(item.branch_id,blank(branch_names.get(item.branch_id,'미지정 지점')))
+  staff_name=(item.assigned_staff or item.created_by or '미지정').strip() or '미지정';staff_key=(item.branch_id,staff_name)
+  staff=staff_rows.setdefault(staff_key,blank(staff_name));staff['branch']=branch_names.get(item.branch_id,'미지정 지점')
+  for row in (branch,staff):row[f'{kind}_count']+=1;row['settlement']+=settlement;row['margin']+=item.final_margin or 0
+ rows_branch=sorted(branch_rows.values(),key=lambda x:(x['margin'],x['mobile_count']+x['wired_count']),reverse=True)
+ rows_staff=sorted(staff_rows.values(),key=lambda x:(x['margin'],x['mobile_count']+x['wired_count']),reverse=True)
+ max_count=max([x['mobile_count']+x['wired_count'] for x in rows_branch+rows_staff] or [1]);max_margin=max([max(0,x['margin']) for x in rows_branch+rows_staff] or [1]) or 1
+ for row in rows_branch+rows_staff:
+  row['total_count']=row['mobile_count']+row['wired_count'];row['count_pct']=round(row['total_count']/max_count*100);row['margin_pct']=round(max(0,row['margin'])/max_margin*100)
+ totals={'mobile_count':len(mobile),'wired_count':len(wired),'settlement':sum(x.settlement_amount_v2 or money(x.settlement) for x in mobile)+sum(x.settlement_amount or 0 for x in wired),'margin':sum(x.final_margin or 0 for x in mobile)+sum(x.final_margin or 0 for x in wired)}
+ return month,rows_branch,rows_staff,totals
+
+@app.get('/reports/sales-performance')
+@login_required
+def sales_performance():
+ prepare_database();month=request.args.get('month') or date.today().strftime('%Y-%m');branch_id=scoped_branch_from_request()
+ month,branch_rows,staff_rows,totals=sales_performance_data(month,branch_id)
+ return render_template('sales_performance.html',month=month,branch_id=branch_id,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all(),branch_rows=branch_rows,staff_rows=staff_rows,totals=totals)
+
+@app.get('/reports/sales-performance.xlsx')
+@login_required
+def sales_performance_export():
+ from openpyxl import Workbook
+ from openpyxl.styles import Font,PatternFill,Alignment
+ month=request.args.get('month') or date.today().strftime('%Y-%m');branch_id=scoped_branch_from_request();month,branch_rows,staff_rows,totals=sales_performance_data(month,branch_id)
+ wb=Workbook();wb.remove(wb.active)
+ def add_sheet(title,headers,rows):
+  ws=wb.create_sheet(title);ws.append(headers)
+  for cell in ws[1]:cell.font=Font(bold=True,color='FFFFFF');cell.fill=PatternFill('solid',fgColor='14324A');cell.alignment=Alignment(horizontal='center')
+  for row in rows:ws.append(row)
+  ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
+  for col in ws.columns:ws.column_dimensions[col[0].column_letter].width=min(30,max(13,max(len(str(c.value or '')) for c in col)+2))
+ add_sheet('매장별 실적',['매장','모바일 건수','유선 건수','총 건수','정산매출','최종마진'],[(x['label'],x['mobile_count'],x['wired_count'],x['total_count'],x['settlement'],x['margin']) for x in branch_rows])
+ add_sheet('직원별 실적',['매장','직원','모바일 건수','유선 건수','총 건수','정산매출','최종마진'],[(x['branch'],x['label'],x['mobile_count'],x['wired_count'],x['total_count'],x['settlement'],x['margin']) for x in staff_rows])
+ audit('월별 실적보고서 다운로드','report',month,f'지점 {branch_id or "전체"} · {totals["mobile_count"]+totals["wired_count"]}건');db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
+ return send_file(out,as_attachment=True,download_name=f'TrustFlow_{month}_월별실적.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
 @app.route('/cash-ledger',methods=['GET','POST'])
 @login_required
 def cash_ledger():
