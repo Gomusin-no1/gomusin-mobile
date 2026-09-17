@@ -1092,11 +1092,12 @@ def task_edit(task_id):
 @app.route('/customers')
 @login_required
 def customers():
- prepare_database(); q=request.args.get('q','').strip(); month=request.args.get('month','').strip(); branch_id=request.args.get('branch_id','').strip()
+ prepare_database(); q=request.args.get('q','').strip(); month=request.args.get('month','').strip(); branch_id=request.args.get('branch_id','').strip();customer_type=request.args.get('customer_type','').strip()
  if not is_admin(): branch_id=str(current_branch_id() or '')
  query=customer_query_scoped()
  if q:
   phone_q=normalize_phone(q); query=query.filter(or_(Customer.name.ilike(f'%{q}%'),Customer.phone.ilike(f'%{phone_q or q}%'),Customer.address_road.ilike(f'%{q}%'),Customer.address_jibun.ilike(f'%{q}%'),Customer.address_detail.ilike(f'%{q}%')))
+ if customer_type:query=query.filter_by(customer_type=customer_type)
  sale_scope=apply_branch_scope(Sale.query,Sale)
  if branch_id:
   try:sale_scope=sale_scope.filter(Sale.branch_id==int(branch_id))
@@ -1121,7 +1122,35 @@ def customers():
   sale_map[c.id]=sq.order_by(Sale.opening_date.desc(),Sale.id.desc()).first()
  months=[r[0].strftime('%Y-%m') for r in apply_branch_scope(db.session.query(Sale.opening_date),Sale).filter(Sale.opening_date.isnot(None)).order_by(Sale.opening_date.desc()).all()]
  months=list(dict.fromkeys(months))
- return render_template('customers.html',customers=customers_list,q=q,month=month,months=months,branches=Branch.query.filter_by(active=True).all(),branch_id=branch_id,sale_map=sale_map)
+ return render_template('customers.html',customers=customers_list,q=q,month=month,months=months,branches=Branch.query.filter_by(active=True).all(),branch_id=branch_id,customer_type=customer_type,sale_map=sale_map)
+
+@app.get('/customers/export.xlsx')
+@login_required
+def customers_export():
+ from openpyxl import Workbook
+ from openpyxl.styles import Font,PatternFill,Alignment
+ q=request.args.get('q','').strip();month=request.args.get('month','').strip();branch_id=request.args.get('branch_id','').strip();customer_type=request.args.get('customer_type','').strip()
+ if not is_admin():branch_id=str(current_branch_id() or '')
+ query=customer_query_scoped()
+ if q:
+  phone_q=normalize_phone(q);query=query.filter(or_(Customer.name.ilike(f'%{q}%'),Customer.phone.ilike(f'%{phone_q or q}%'),Customer.address_road.ilike(f'%{q}%'),Customer.address_jibun.ilike(f'%{q}%'),Customer.address_detail.ilike(f'%{q}%')))
+ if customer_type:query=query.filter_by(customer_type=customer_type)
+ sales=apply_branch_scope(Sale.query,Sale)
+ if branch_id:
+  try:sales=sales.filter(Sale.branch_id==int(branch_id))
+  except:return abort(400)
+ if month:
+  try:y,m=map(int,month.split('-'));start=date(y,m,1);sales=sales.filter(Sale.opening_date>=start,Sale.opening_date<add_months(start,1))
+  except:return abort(400)
+ if branch_id or month:
+  phones=[x[0] for x in sales.with_entities(Sale.customer_phone).distinct().all() if x[0]];query=query.filter(Customer.phone.in_(phones or ['__none__']))
+ rows=query.order_by(Customer.name).all();wb=Workbook();ws=wb.active;ws.title='고객목록';ws.append(['고객명','휴대전화','고객유형','통신사','도로명주소','구주소','상세주소','취미','관심사','문자수신동의'])
+ for c in rows:ws.append([c.name,c.phone,c.customer_type,c.carrier,c.address_road,c.address_jibun,c.address_detail,c.hobbies,c.interests,'동의' if c.marketing_consent and not c.marketing_opt_out_at else '미동의'])
+ for cell in ws[1]:cell.font=Font(bold=True,color='FFFFFF');cell.fill=PatternFill('solid',fgColor='14324A');cell.alignment=Alignment(horizontal='center')
+ ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
+ for col,width in {'A':16,'B':16,'C':13,'D':10,'E':32,'F':32,'G':22,'H':22,'I':28,'J':14}.items():ws.column_dimensions[col].width=width
+ audit('고객목록 다운로드','customer','',f'{len(rows)}명 · 유형 {customer_type or "전체"}');db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
+ return send_file(out,as_attachment=True,download_name=f'TrustFlow_고객목록_{date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 @app.route('/customers/<int:cid>')
 @login_required
