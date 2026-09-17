@@ -54,6 +54,17 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.assertIn('A 고객'.encode(),response.data)
   self.assertNotIn('B 고객'.encode(),response.data)
 
+ def test_customer_type_filter_and_export_are_company_isolated(self):
+  from openpyxl import load_workbook
+  with app.app_context():
+   own=Customer.query.filter_by(company_code='company-a').first();own.customer_type='성지손님';own.hobbies='낚시';own.interests='인터넷 결합'
+   foreign=Customer.query.execution_options(skip_tenant=True).filter_by(company_code='company-b').first();foreign.customer_type='성지손님';db.session.commit()
+  self.login_as_a();page=self.client.get('/customers?customer_type=성지손님')
+  self.assertEqual(200,page.status_code);self.assertIn('A 고객'.encode(),page.data);self.assertNotIn('B 고객'.encode(),page.data)
+  response=self.client.get('/customers/export.xlsx?customer_type=성지손님');self.assertEqual(200,response.status_code)
+  book=load_workbook(io.BytesIO(response.data),read_only=True);content=' '.join(str(cell or '') for row in book.active.iter_rows(values_only=True) for cell in row)
+  self.assertIn('A 고객',content);self.assertIn('낚시',content);self.assertIn('인터넷 결합',content);self.assertNotIn('B 고객',content)
+
  def test_deactivated_user_session_is_revoked_on_next_request(self):
   self.login_as_a()
   with app.app_context():
