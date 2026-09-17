@@ -91,6 +91,7 @@ class Customer(db.Model):
  id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),nullable=False); phone=db.Column(db.String(30),index=True); device=db.Column(db.String(100)); carrier=db.Column(db.String(30)); status=db.Column(db.String(30),default='상담중',nullable=False); memo=db.Column(db.Text)
  company_code=db.Column(db.String(50),default='trustflow',nullable=False,index=True); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id'),index=True)
  address_road=db.Column(db.String(255),index=True); address_jibun=db.Column(db.String(255),index=True); address_detail=db.Column(db.String(255)); address_key=db.Column(db.String(255),index=True)
+ marketing_consent=db.Column(db.Boolean,default=False,nullable=False,index=True); marketing_consent_at=db.Column(db.DateTime); marketing_opt_out_at=db.Column(db.DateTime,index=True)
  created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False); updated_at=db.Column(db.DateTime,default=datetime.utcnow,onupdate=datetime.utcnow,nullable=False)
 class Booking(db.Model):
  id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),nullable=False); phone=db.Column(db.String(30)); visit_date=db.Column(db.String(50)); device=db.Column(db.String(100)); memo=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
@@ -231,6 +232,21 @@ class InventoryMovement(db.Model):
  processed_by=db.Column(db.String(50)); memo=db.Column(db.Text)
  created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False,index=True)
 
+class SmsCampaign(db.Model):
+ id=db.Column(db.Integer,primary_key=True); company_code=db.Column(db.String(50),nullable=False,index=True)
+ name=db.Column(db.String(120),nullable=False); message=db.Column(db.Text,nullable=False)
+ start_month=db.Column(db.String(7),nullable=False); end_month=db.Column(db.String(7),nullable=False)
+ branch_id=db.Column(db.Integer,db.ForeignKey('branch.id'),index=True); daily_limit=db.Column(db.Integer,default=100,nullable=False)
+ status=db.Column(db.String(20),default='작성',nullable=False,index=True); sender_name=db.Column(db.String(80),nullable=False); sender_contact=db.Column(db.String(30),nullable=False); opt_out_number=db.Column(db.String(30),nullable=False)
+ created_by=db.Column(db.String(50)); approved_by=db.Column(db.String(50)); approved_at=db.Column(db.DateTime); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False,index=True)
+
+class SmsCampaignRecipient(db.Model):
+ id=db.Column(db.Integer,primary_key=True); campaign_id=db.Column(db.Integer,db.ForeignKey('sms_campaign.id',ondelete='CASCADE'),nullable=False,index=True)
+ customer_id=db.Column(db.Integer,db.ForeignKey('customer.id'),nullable=False,index=True); phone=db.Column(db.String(30),nullable=False,index=True)
+ scheduled_date=db.Column(db.Date,nullable=False,index=True); status=db.Column(db.String(20),default='대기',nullable=False,index=True)
+ sent_at=db.Column(db.DateTime); error=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
+ __table_args__=(db.UniqueConstraint('campaign_id','phone',name='uq_sms_campaign_phone'),)
+
 def money(v):
  try:return int(float(str(v or 0).replace(',','').replace('원','').strip() or 0))
  except:return 0
@@ -267,6 +283,30 @@ def _send_sms(phone,message):
   with urllib.request.urlopen(urllib.request.Request(endpoint,data=payload,headers=headers,method='POST'),timeout=8) as response:
    return 200<=response.status<300
  except Exception:return False
+
+def marketing_sms_text(campaign):
+ return f'(광고) {campaign.sender_name}\n{campaign.message.strip()}\n문의: {campaign.sender_contact}\n무료수신거부: {campaign.opt_out_number}'
+
+def run_sms_campaigns(run_date=None, korea_hour=None):
+ run_date=run_date or (datetime.utcnow()+timedelta(hours=9)).date()
+ korea_hour=(datetime.utcnow()+timedelta(hours=9)).hour if korea_hour is None else korea_hour
+ if korea_hour<8 or korea_hour>=21:return {'sent':0,'failed':0,'skipped':'outside_hours'}
+ sent=failed=0
+ for campaign in SmsCampaign.query.execution_options(skip_tenant=True).filter_by(status='진행중').all():
+  korea_midnight=datetime.combine(run_date,datetime.min.time())-timedelta(hours=9);next_midnight=korea_midnight+timedelta(days=1)
+  sent_today=SmsCampaignRecipient.query.execution_options(skip_tenant=True).filter(SmsCampaignRecipient.campaign_id==campaign.id,SmsCampaignRecipient.status=='발송완료',SmsCampaignRecipient.sent_at>=korea_midnight,SmsCampaignRecipient.sent_at<next_midnight).count()
+  allowance=max(0,campaign.daily_limit-sent_today)
+  due=SmsCampaignRecipient.query.execution_options(skip_tenant=True).filter(SmsCampaignRecipient.campaign_id==campaign.id,SmsCampaignRecipient.status=='대기',SmsCampaignRecipient.scheduled_date<=run_date).order_by(SmsCampaignRecipient.scheduled_date,SmsCampaignRecipient.id).limit(allowance).all() if allowance else []
+  for recipient in due:
+   customer=Customer.query.execution_options(skip_tenant=True).filter_by(id=recipient.customer_id,company_code=campaign.company_code).first()
+   if not customer or not customer.marketing_consent or customer.marketing_opt_out_at or normalize_phone(customer.phone)!=recipient.phone:
+    recipient.status='제외';recipient.error='수신동의 철회 또는 고객정보 변경';continue
+   if _send_sms(recipient.phone,marketing_sms_text(campaign)):
+    recipient.status='발송완료';recipient.sent_at=datetime.utcnow();recipient.error=None;sent+=1
+   else:recipient.status='실패';recipient.error='문자 발송사 처리 실패';failed+=1
+  if SmsCampaignRecipient.query.execution_options(skip_tenant=True).filter_by(campaign_id=campaign.id,status='대기').count()==0:campaign.status='완료'
+  db.session.commit()
+ return {'sent':sent,'failed':failed}
 
 def issue_phone_code(purpose,company,phone):
  company=(company or '').strip().lower();phone=normalize_phone(phone)
@@ -341,7 +381,8 @@ def tenant_read_filter(execute_state):
   with_loader_criteria(Customer,lambda row:row.company_code==company,include_aliases=True),
   with_loader_criteria(User,lambda row:row.company_code==company,include_aliases=True),
   with_loader_criteria(AccountRequest,lambda row:row.company_code==company,include_aliases=True),
-  with_loader_criteria(AuditLog,lambda row:row.company_code==company,include_aliases=True)
+  with_loader_criteria(AuditLog,lambda row:row.company_code==company,include_aliases=True),
+  with_loader_criteria(SmsCampaign,lambda row:row.company_code==company,include_aliases=True)
  )
 
 @event.listens_for(OrmSession,'before_flush')
@@ -349,7 +390,7 @@ def tenant_write_defaults(db_session,flush_context,instances):
  if not has_request_context() or not session.get('user_id'):return
  company=current_company()
  for obj in db_session.new:
-  if isinstance(obj,(Branch,Customer)) and not obj.company_code:obj.company_code=company
+  if isinstance(obj,(Branch,Customer,SmsCampaign)) and not obj.company_code:obj.company_code=company
 
 def is_admin():
  return session.get('role')=='admin'
@@ -596,7 +637,7 @@ def seed_masters():
  db.session.commit()
 
 def prepare_database():
- db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale()
+ db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)','marketing_consent':'BOOLEAN DEFAULT FALSE','marketing_consent_at':'TIMESTAMP','marketing_opt_out_at':'TIMESTAMP'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale()
  if db.engine.dialect.name=='postgresql':
   try:
    names={x.get('name') for x in db.inspect(db.engine).get_unique_constraints('user')}
@@ -1024,7 +1065,8 @@ def customer_new():
   bid=current_branch_id() if not is_admin() else request.form.get('branch_id')
   if not bid:flash('고객을 등록할 지점을 선택해주세요.','error');return redirect(url_for('customer_new'))
   enforce_branch(bid)
-  db.session.add(Customer(name=name,phone=normalize_phone(request.form.get('phone','')),carrier=request.form.get('carrier',''),status=request.form.get('status','상담중'),memo=request.form.get('memo',''),address_road=road,address_jibun=jibun,address_detail=detail,address_key=key,branch_id=int(bid),company_code=current_company()));db.session.commit();flash('고객이 등록되었습니다.','success');return redirect(url_for('customers'))
+  consent=request.form.get('marketing_consent')=='on'
+  db.session.add(Customer(name=name,phone=normalize_phone(request.form.get('phone','')),carrier=request.form.get('carrier',''),status=request.form.get('status','상담중'),memo=request.form.get('memo',''),address_road=road,address_jibun=jibun,address_detail=detail,address_key=key,branch_id=int(bid),company_code=current_company(),marketing_consent=consent,marketing_consent_at=datetime.utcnow() if consent else None));db.session.commit();flash('고객이 등록되었습니다.','success');return redirect(url_for('customers'))
  return render_template('customer_form.html',customer=None,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all())
 @app.route('/customers/<int:cid>/edit',methods=['GET','POST'])
 @login_required
@@ -1035,8 +1077,74 @@ def customer_edit(cid):
   road=request.form.get('address_road','').strip(); jibun=request.form.get('address_jibun','').strip(); detail=request.form.get('address_detail','').strip(); key=request.form.get('address_key','').strip() or ('|'.join([road,jibun,detail]).lower().replace(' ',''))
   bid=current_branch_id() if not is_admin() else (request.form.get('branch_id') or c.branch_id)
   enforce_branch(bid)
-  c.name=request.form.get('name','').strip();c.phone=normalize_phone(request.form.get('phone',''));c.carrier=request.form.get('carrier','');c.status=request.form.get('status','상담중');c.memo=request.form.get('memo','');c.address_road=road;c.address_jibun=jibun;c.address_detail=detail;c.address_key=key;c.branch_id=int(bid);db.session.commit();flash('고객정보가 수정되었습니다.','success');return redirect(url_for('customers'))
+  old_consent=c.marketing_consent;consent=request.form.get('marketing_consent')=='on'
+  c.name=request.form.get('name','').strip();c.phone=normalize_phone(request.form.get('phone',''));c.carrier=request.form.get('carrier','');c.status=request.form.get('status','상담중');c.memo=request.form.get('memo','');c.address_road=road;c.address_jibun=jibun;c.address_detail=detail;c.address_key=key;c.branch_id=int(bid);c.marketing_consent=consent
+  if consent and not old_consent:c.marketing_consent_at=datetime.utcnow();c.marketing_opt_out_at=None
+  if old_consent and not consent:c.marketing_opt_out_at=datetime.utcnow()
+  db.session.commit();flash('고객정보가 수정되었습니다.','success');return redirect(url_for('customers'))
  return render_template('customer_form.html',customer=c,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all())
+
+@app.route('/sms-campaigns')
+@login_required
+@admin_required
+def sms_campaigns():
+ rows=SmsCampaign.query.order_by(SmsCampaign.created_at.desc()).all();stats={}
+ for item in rows:
+  grouped=dict(db.session.query(SmsCampaignRecipient.status,db.func.count(SmsCampaignRecipient.id)).filter_by(campaign_id=item.id).group_by(SmsCampaignRecipient.status).all());stats[item.id]={'total':sum(grouped.values()),**grouped}
+ return render_template('sms_campaigns.html',campaigns=rows,stats=stats,sms_ready=bool(os.environ.get('SMS_OPT_OUT_NUMBER','').strip() and os.environ.get('SMS_SENDER','').strip()))
+
+@app.route('/sms-campaigns/new',methods=['GET','POST'])
+@login_required
+@admin_required
+def sms_campaign_new():
+ if request.method=='POST':
+  name=request.form.get('name','').strip();message=request.form.get('message','').strip();start_month=request.form.get('start_month','').strip();end_month=request.form.get('end_month','').strip();branch_id=request.form.get('branch_id','').strip();daily_limit=max(1,min(money(request.form.get('daily_limit')),10000))
+  try:sy,sm=map(int,start_month.split('-'));ey,em=map(int,end_month.split('-'));start=date(sy,sm,1);end=add_months(date(ey,em,1),1)
+  except Exception:flash('개통월 범위를 정확히 선택해주세요.','error');return redirect(url_for('sms_campaign_new'))
+  if not name or not message or start>=end:flash('캠페인명·문구와 올바른 개통월 범위를 입력해주세요.','error');return redirect(url_for('sms_campaign_new'))
+  bid=int(branch_id) if branch_id else None
+  if bid:enforce_branch(bid)
+  campaign=SmsCampaign(company_code=current_company(),name=name,message=message,start_month=start_month,end_month=end_month,branch_id=bid,daily_limit=daily_limit,status='승인대기',sender_name=os.environ.get('SMS_SENDER_NAME','TrustFlow').strip(),sender_contact=normalize_phone(os.environ.get('SMS_CONTACT') or os.environ.get('SMS_SENDER')),opt_out_number=os.environ.get('SMS_OPT_OUT_NUMBER','').strip(),created_by=session.get('display_name') or session.get('username'));db.session.add(campaign);db.session.flush()
+  sq=Sale.query.filter(Sale.opening_date>=start,Sale.opening_date<end,Sale.customer_phone.isnot(None));sq=sq.filter(Sale.branch_id==bid) if bid else apply_branch_scope(sq,Sale)
+  phones=[]
+  for (phone,) in sq.with_entities(Sale.customer_phone).order_by(Sale.opening_date,Sale.id).all():
+   phone=normalize_phone(phone)
+   if phone and phone not in phones:phones.append(phone)
+  customers={}
+  if phones:
+   for customer in Customer.query.filter(Customer.phone.in_(phones),Customer.marketing_consent.is_(True),Customer.marketing_opt_out_at.is_(None)).order_by(Customer.updated_at.desc()).all():customers.setdefault(normalize_phone(customer.phone),customer)
+  today=(datetime.utcnow()+timedelta(hours=9)).date()
+  for index,phone in enumerate(phones):
+   customer=customers.get(phone)
+   if customer:db.session.add(SmsCampaignRecipient(campaign_id=campaign.id,customer_id=customer.id,phone=phone,scheduled_date=today+timedelta(days=index//daily_limit)))
+  db.session.commit();audit('문자캠페인 생성','SmsCampaign',campaign.id,f'{len(customers)}명 / 일 {daily_limit}건',bid,commit=True);flash(f'수신동의 고객 {len(customers)}명을 중복 없이 예약했습니다. 관리자 시작 전에는 발송되지 않습니다.','success');return redirect(url_for('sms_campaign_detail',campaign_id=campaign.id))
+ return render_template('sms_campaign_form.html',branches=Branch.query.filter_by(active=True).order_by(Branch.id).all(),current_month=date.today().strftime('%Y-%m'))
+
+@app.route('/sms-campaigns/<int:campaign_id>')
+@login_required
+@admin_required
+def sms_campaign_detail(campaign_id):
+ campaign=SmsCampaign.query.get_or_404(campaign_id);recipients=SmsCampaignRecipient.query.filter_by(campaign_id=campaign.id).order_by(SmsCampaignRecipient.scheduled_date,SmsCampaignRecipient.id).limit(1000).all();customers={c.id:c for c in Customer.query.filter(Customer.id.in_([r.customer_id for r in recipients] or [0])).all()};grouped=dict(db.session.query(SmsCampaignRecipient.status,db.func.count(SmsCampaignRecipient.id)).filter_by(campaign_id=campaign.id).group_by(SmsCampaignRecipient.status).all())
+ return render_template('sms_campaign_detail.html',campaign=campaign,recipients=recipients,customers=customers,stats={'total':sum(grouped.values()),**grouped},sms_ready=bool(campaign.opt_out_number and campaign.sender_contact and os.environ.get('SMS_SENDER','').strip()))
+
+@app.post('/sms-campaigns/<int:campaign_id>/status')
+@login_required
+@admin_required
+def sms_campaign_status(campaign_id):
+ campaign=SmsCampaign.query.get_or_404(campaign_id);action=request.form.get('action')
+ if action=='start':
+  if not campaign.opt_out_number or not campaign.sender_contact or not os.environ.get('SMS_SENDER','').strip():flash('발송번호·문의번호·무료 수신거부번호 설정 후 시작할 수 있습니다.','error');return redirect(url_for('sms_campaign_detail',campaign_id=campaign.id))
+  campaign.status='진행중';campaign.approved_by=session.get('display_name') or session.get('username');campaign.approved_at=datetime.utcnow()
+ elif action=='pause':campaign.status='일시정지'
+ elif action=='resume':campaign.status='진행중'
+ else:abort(400)
+ db.session.commit();audit(f'문자캠페인 {action}','SmsCampaign',campaign.id,campaign.status,campaign.branch_id,commit=True);flash('캠페인 상태를 변경했습니다.','success');return redirect(url_for('sms_campaign_detail',campaign_id=campaign.id))
+
+@app.post('/internal/sms-campaigns/run')
+def sms_campaign_run():
+ token=os.environ.get('CAMPAIGN_CRON_TOKEN','').strip();provided=request.headers.get('Authorization','')
+ if not token or not secrets.compare_digest(provided,f'Bearer {token}'):abort(401)
+ return jsonify(run_sms_campaigns())
 
 @app.post('/customers/<int:cid>/delete')
 @login_required
