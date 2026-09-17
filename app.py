@@ -90,7 +90,7 @@ class Branch(db.Model):
 class Customer(db.Model):
  id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),nullable=False); phone=db.Column(db.String(30),index=True); device=db.Column(db.String(100)); carrier=db.Column(db.String(30)); status=db.Column(db.String(30),default='상담중',nullable=False); memo=db.Column(db.Text)
  company_code=db.Column(db.String(50),default='trustflow',nullable=False,index=True); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id'),index=True); customer_type=db.Column(db.String(30),default='기존손님',nullable=False,index=True)
- address_road=db.Column(db.String(255),index=True); address_jibun=db.Column(db.String(255),index=True); address_detail=db.Column(db.String(255)); address_key=db.Column(db.String(255),index=True)
+ address_road=db.Column(db.String(255),index=True); address_jibun=db.Column(db.String(255),index=True); address_detail=db.Column(db.String(255)); address_key=db.Column(db.String(255),index=True); hobbies=db.Column(db.String(500)); interests=db.Column(db.String(500))
  marketing_consent=db.Column(db.Boolean,default=False,nullable=False,index=True); marketing_consent_at=db.Column(db.DateTime); marketing_opt_out_at=db.Column(db.DateTime,index=True)
  created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False); updated_at=db.Column(db.DateTime,default=datetime.utcnow,onupdate=datetime.utcnow,nullable=False)
 class Booking(db.Model):
@@ -642,7 +642,7 @@ def seed_masters():
  db.session.commit()
 
 def prepare_database():
- db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','customer_type':"VARCHAR(30) DEFAULT '기존손님'",'address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)','marketing_consent':'BOOLEAN DEFAULT FALSE','marketing_consent_at':'TIMESTAMP','marketing_opt_out_at':'TIMESTAMP'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale()
+ db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','customer_type':"VARCHAR(30) DEFAULT '기존손님'",'address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)','hobbies':'VARCHAR(500)','interests':'VARCHAR(500)','marketing_consent':'BOOLEAN DEFAULT FALSE','marketing_consent_at':'TIMESTAMP','marketing_opt_out_at':'TIMESTAMP'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale()
  _add_columns('sms_campaign_recipient',{'last_attempt_at':'TIMESTAMP','next_attempt_at':'TIMESTAMP','attempt_count':'INTEGER DEFAULT 0'})
  if db.engine.dialect.name=='postgresql':
   try:
@@ -973,7 +973,13 @@ def contact_log_add(cid):
  if not bid:flash('담당 지점을 확인할 수 없습니다.','error');return redirect(url_for('customer_detail',cid=cid))
  enforce_branch(bid); note=request.form.get('note','').strip()
  if not note:flash('통화내용을 입력해주세요.','error');return redirect(url_for('customer_detail',cid=cid))
- db.session.add(ContactLog(customer_id=cid,branch_id=int(bid),staff_name=session.get('display_name') or session.get('username'),channel=request.form.get('channel','전화'),outcome=request.form.get('outcome','상담완료'),note=note,next_contact_date=parse_date(request.form.get('next_contact_date'))));db.session.commit();flash('상담 기록을 저장했습니다.','success');return redirect(url_for('customer_detail',cid=cid))
+ next_date=parse_date(request.form.get('next_contact_date'));staff_name=session.get('display_name') or session.get('username')
+ db.session.add(ContactLog(customer_id=cid,branch_id=int(bid),staff_name=staff_name,channel=request.form.get('channel','전화'),outcome=request.form.get('outcome','상담완료'),note=note,next_contact_date=next_date))
+ if next_date:
+  latest_sale=apply_branch_scope(Sale.query,Sale).filter_by(customer_phone=c.phone).order_by(Sale.opening_date.desc(),Sale.id.desc()).first()
+  existing=CustomerTask.query.filter_by(customer_id=cid,sale_id=latest_sale.id if latest_sale else None,task_type='OB 재연락',due_date=next_date).filter(CustomerTask.status!='완료').first()
+  if not existing:db.session.add(CustomerTask(customer_id=cid,sale_id=latest_sale.id if latest_sale else None,task_type='OB 재연락',title=f'{c.name} 고객 재연락',description=note,due_date=next_date,assigned_staff=staff_name,status='처리예정',auto_created=True))
+ db.session.commit();flash('상담 기록과 다음 연락 업무를 저장했습니다.' if next_date else '상담 기록을 저장했습니다.','success');return redirect(url_for('customer_detail',cid=cid))
 
 @app.route('/legal-cases',methods=['GET','POST'])
 @login_required
@@ -1154,7 +1160,7 @@ def customer_new():
   if not bid:flash('고객을 등록할 지점을 선택해주세요.','error');return redirect(url_for('customer_new'))
   enforce_branch(bid)
   consent=request.form.get('marketing_consent')=='on'
-  db.session.add(Customer(name=name,phone=normalize_phone(request.form.get('phone','')),carrier=request.form.get('carrier',''),status=request.form.get('status','상담중'),customer_type=request.form.get('customer_type','기존손님'),memo=request.form.get('memo',''),address_road=road,address_jibun=jibun,address_detail=detail,address_key=key,branch_id=int(bid),company_code=current_company(),marketing_consent=consent,marketing_consent_at=datetime.utcnow() if consent else None));db.session.commit();flash('고객이 등록되었습니다.','success');return redirect(url_for('customers'))
+  db.session.add(Customer(name=name,phone=normalize_phone(request.form.get('phone','')),carrier=request.form.get('carrier',''),status=request.form.get('status','상담중'),customer_type=request.form.get('customer_type','기존손님'),hobbies=request.form.get('hobbies','').strip(),interests=request.form.get('interests','').strip(),memo=request.form.get('memo',''),address_road=road,address_jibun=jibun,address_detail=detail,address_key=key,branch_id=int(bid),company_code=current_company(),marketing_consent=consent,marketing_consent_at=datetime.utcnow() if consent else None));db.session.commit();flash('고객이 등록되었습니다.','success');return redirect(url_for('customers'))
  return render_template('customer_form.html',customer=None,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all())
 @app.route('/customers/<int:cid>/edit',methods=['GET','POST'])
 @login_required
@@ -1166,7 +1172,7 @@ def customer_edit(cid):
   bid=current_branch_id() if not is_admin() else (request.form.get('branch_id') or c.branch_id)
   enforce_branch(bid)
   old_consent=c.marketing_consent;consent=request.form.get('marketing_consent')=='on'
-  c.name=request.form.get('name','').strip();c.phone=normalize_phone(request.form.get('phone',''));c.carrier=request.form.get('carrier','');c.status=request.form.get('status','상담중');c.customer_type=request.form.get('customer_type','기존손님');c.memo=request.form.get('memo','');c.address_road=road;c.address_jibun=jibun;c.address_detail=detail;c.address_key=key;c.branch_id=int(bid);c.marketing_consent=consent
+  c.name=request.form.get('name','').strip();c.phone=normalize_phone(request.form.get('phone',''));c.carrier=request.form.get('carrier','');c.status=request.form.get('status','상담중');c.customer_type=request.form.get('customer_type','기존손님');c.hobbies=request.form.get('hobbies','').strip();c.interests=request.form.get('interests','').strip();c.memo=request.form.get('memo','');c.address_road=road;c.address_jibun=jibun;c.address_detail=detail;c.address_key=key;c.branch_id=int(bid);c.marketing_consent=consent
   if consent and not old_consent:c.marketing_consent_at=datetime.utcnow();c.marketing_opt_out_at=None
   if old_consent and not consent:c.marketing_opt_out_at=datetime.utcnow()
   db.session.commit();flash('고객정보가 수정되었습니다.','success');return redirect(url_for('customers'))
