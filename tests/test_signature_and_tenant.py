@@ -105,6 +105,27 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.assertIn('A 유선고객'.encode(),wired.data);self.assertNotIn('B 비공개유선'.encode(),wired.data)
   self.assertIn('A시재'.encode(),ledger.data);self.assertNotIn('B비공개시재'.encode(),ledger.data)
 
+ def test_monthly_performance_graph_groups_stores_and_staff(self):
+  with app.app_context():
+   db.session.add_all([
+    Sale(customer_name='A 실적고객',opening_date=date.today(),branch_id=self.a_branch,assigned_staff='김판매',settlement_amount_v2=500000,final_margin=120000),
+    WiredSale(sale_date=date.today(),customer_name='A 유선실적',branch_id=self.a_branch,assigned_staff='김판매',settlement_amount=300000,final_margin=80000),
+    Sale(customer_name='B 비공개실적',opening_date=date.today(),branch_id=self.b_branch,assigned_staff='타회사직원',settlement_amount_v2=900000,final_margin=400000)
+   ]);db.session.commit()
+  self.login_as_a();response=self.client.get(f'/reports/sales-performance?month={date.today():%Y-%m}')
+  self.assertEqual(200,response.status_code);body=response.get_data(as_text=True)
+  self.assertIn('A 본점',body);self.assertIn('김판매',body);self.assertIn('800,000원',body);self.assertIn('200,000원',body)
+  self.assertNotIn('B 비공개실적',body);self.assertNotIn('타회사직원',body)
+
+ def test_monthly_performance_excel_is_company_isolated(self):
+  from openpyxl import load_workbook
+  with app.app_context():
+   db.session.add_all([Sale(customer_name='A 보고서',opening_date=date.today(),branch_id=self.a_branch,assigned_staff='A직원',settlement_amount_v2=100000,final_margin=30000),Sale(customer_name='B 보고서',opening_date=date.today(),branch_id=self.b_branch,assigned_staff='B직원',settlement_amount_v2=700000,final_margin=200000)]);db.session.commit()
+  self.login_as_a();response=self.client.get(f'/reports/sales-performance.xlsx?month={date.today():%Y-%m}')
+  self.assertEqual(200,response.status_code);book=load_workbook(io.BytesIO(response.data),read_only=True)
+  content=' '.join(str(cell or '') for sheet in book.worksheets for row in sheet.iter_rows(values_only=True) for cell in row)
+  self.assertIn('A직원',content);self.assertNotIn('B직원',content);self.assertEqual(['매장별 실적','직원별 실적'],book.sheetnames)
+
  def test_admin_backup_excludes_other_company_records(self):
   from openpyxl import load_workbook
   with app.app_context():
