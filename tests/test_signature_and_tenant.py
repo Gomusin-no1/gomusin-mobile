@@ -11,7 +11,7 @@ os.environ['ADMIN_USERNAME']=''
 os.environ['ADMIN_PASSWORD']=''
 
 from werkzeug.security import generate_password_hash, check_password_hash
-from app import app, db, User, Branch, Customer, Inventory, InventoryMovement, Sale, WiredSale, CashLedger, AccountRequest, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns
+from app import app, db, User, Branch, Customer, Inventory, InventoryMovement, Sale, WiredSale, CashLedger, AccountRequest, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months
 
 
 class SignatureAndTenantTest(unittest.TestCase):
@@ -125,6 +125,25 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.assertEqual(200,response.status_code);book=load_workbook(io.BytesIO(response.data),read_only=True)
   content=' '.join(str(cell or '') for sheet in book.worksheets for row in sheet.iter_rows(values_only=True) for cell in row)
   self.assertIn('A직원',content);self.assertNotIn('B직원',content);self.assertEqual(['매장별 실적','직원별 실적'],book.sheetnames)
+
+ def test_ob_management_uses_latest_sale_and_customer_type_filter(self):
+  old=add_months(date.today(),-31);recent=add_months(date.today(),-2)
+  with app.app_context():
+   target=Customer(name='장기 성지고객',phone='01055551111',company_code='company-a',branch_id=self.a_branch,customer_type='성지손님')
+   renewed=Customer(name='최근 재개통고객',phone='01055552222',company_code='company-a',branch_id=self.a_branch,customer_type='성지손님')
+   foreign=Customer(name='타회사 장기고객',phone='01055553333',company_code='company-b',branch_id=self.b_branch,customer_type='성지손님')
+   db.session.add_all([target,renewed,foreign,Sale(customer_name=target.name,customer_phone=target.phone,opening_date=old,branch_id=self.a_branch),Sale(customer_name=renewed.name,customer_phone=renewed.phone,opening_date=old,branch_id=self.a_branch),Sale(customer_name=renewed.name,customer_phone=renewed.phone,opening_date=recent,branch_id=self.a_branch),Sale(customer_name=foreign.name,customer_phone=foreign.phone,opening_date=old,branch_id=self.b_branch)]);db.session.commit()
+  self.login_as_a();response=self.client.get('/ob-management?age=30&customer_type=성지손님')
+  self.assertEqual(200,response.status_code);body=response.get_data(as_text=True)
+  self.assertIn('장기 성지고객',body);self.assertNotIn('최근 재개통고객',body);self.assertNotIn('타회사 장기고객',body)
+
+ def test_ob_management_excel_contains_filtered_customers(self):
+  from openpyxl import load_workbook
+  with app.app_context():
+   customer=Customer(name='OB 엑셀고객',phone='01066661111',company_code='company-a',branch_id=self.a_branch,customer_type='로드손님');db.session.add(customer);db.session.add(Sale(customer_name=customer.name,customer_phone=customer.phone,opening_date=add_months(date.today(),-20),branch_id=self.a_branch,assigned_staff='담당직원'));db.session.commit()
+  self.login_as_a();response=self.client.get('/ob-management.xlsx?age=18&customer_type=로드손님')
+  self.assertEqual(200,response.status_code);book=load_workbook(io.BytesIO(response.data),read_only=True);content=' '.join(str(cell or '') for row in book.active.iter_rows(values_only=True) for cell in row)
+  self.assertIn('OB 엑셀고객',content);self.assertIn('로드손님',content);self.assertIn('담당직원',content)
 
  def test_admin_backup_excludes_other_company_records(self):
   from openpyxl import load_workbook
