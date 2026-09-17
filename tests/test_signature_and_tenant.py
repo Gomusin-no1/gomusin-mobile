@@ -2,7 +2,7 @@ import os
 import io
 import sys
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -11,7 +11,7 @@ os.environ['ADMIN_USERNAME']=''
 os.environ['ADMIN_PASSWORD']=''
 
 from werkzeug.security import generate_password_hash, check_password_hash
-from app import app, db, User, Branch, Customer, Inventory, InventoryMovement, Sale, WiredSale, CashLedger, AccountRequest, LOGIN_STORIES, PhoneVerification, _send_sms, issue_phone_code
+from app import app, db, User, Branch, Customer, Inventory, InventoryMovement, Sale, WiredSale, CashLedger, AccountRequest, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns
 
 
 class SignatureAndTenantTest(unittest.TestCase):
@@ -231,6 +231,37 @@ class SignatureAndTenantTest(unittest.TestCase):
    finally:app.config['TESTING']=True
   self.assertEqual('01076671100',captured['message'].from_)
   self.assertEqual('01012345678',captured['message'].to)
+
+ def test_campaign_sends_only_consented_customers_within_daily_limit(self):
+  with app.app_context():
+   consented=Customer.query.filter_by(company_code='company-a').first();consented.marketing_consent=True
+   other=Customer(name='A 수신동의2',phone='01077778888',company_code='company-a',branch_id=self.a_branch,marketing_consent=True)
+   campaign=SmsCampaign(company_code='company-a',name='행사',message='혜택 안내',start_month='2026-09',end_month='2026-09',daily_limit=1,status='진행중',sender_name='고무신모바일',sender_contact='01076671100',opt_out_number='0800000000')
+   db.session.add_all([other,campaign]);db.session.flush()
+   db.session.add_all([SmsCampaignRecipient(campaign_id=campaign.id,customer_id=consented.id,phone=consented.phone,scheduled_date=date.today()),SmsCampaignRecipient(campaign_id=campaign.id,customer_id=other.id,phone=other.phone,scheduled_date=date.today())]);db.session.commit()
+  with app.app_context(),patch('app._send_sms',return_value=True) as sms:
+   result=run_sms_campaigns(date.today(),10)
+   self.assertEqual(1,result['sent']);self.assertEqual(1,sms.call_count)
+   rows=SmsCampaignRecipient.query.order_by(SmsCampaignRecipient.id).all();self.assertEqual(['발송완료','대기'],[x.status for x in rows])
+   self.assertTrue(sms.call_args.args[1].startswith('(광고) 고무신모바일'))
+
+ def test_campaign_failed_delivery_retries_after_backoff(self):
+  with app.app_context():
+   customer=Customer.query.filter_by(company_code='company-a').first();customer.marketing_consent=True
+   campaign=SmsCampaign(company_code='company-a',name='재시도',message='혜택',start_month='2026-09',end_month='2026-09',daily_limit=10,status='진행중',sender_name='고무신모바일',sender_contact='01076671100',opt_out_number='0800000000')
+   db.session.add(campaign);db.session.flush();recipient=SmsCampaignRecipient(campaign_id=campaign.id,customer_id=customer.id,phone=customer.phone,scheduled_date=date.today());db.session.add(recipient);db.session.commit();recipient_id=recipient.id
+  with app.app_context(),patch('app._send_sms',return_value=False):run_sms_campaigns(date.today(),10)
+  with app.app_context():
+   recipient=db.session.get(SmsCampaignRecipient,recipient_id);self.assertEqual(('실패',1), (recipient.status,recipient.attempt_count));recipient.next_attempt_at=datetime.utcnow()-timedelta(minutes=1);db.session.commit()
+  with app.app_context(),patch('app._send_sms',return_value=True):run_sms_campaigns(date.today(),10)
+  with app.app_context():
+   recipient=db.session.get(SmsCampaignRecipient,recipient_id);self.assertEqual(('발송완료',2), (recipient.status,recipient.attempt_count))
+
+ def test_campaign_runner_requires_cron_token(self):
+  with patch.dict(os.environ,{'CAMPAIGN_CRON_TOKEN':'secret-token'}):
+   self.assertEqual(401,self.client.post('/internal/sms-campaigns/run').status_code)
+   with patch('app.run_sms_campaigns',return_value={'sent':0,'failed':0}):
+    self.assertEqual(200,self.client.post('/internal/sms-campaigns/run',headers={'Authorization':'Bearer secret-token'}).status_code)
 
  def test_sale_normalizes_phone_and_auto_transfers_inventory_between_company_branches(self):
   with app.app_context():
