@@ -244,7 +244,7 @@ class SmsCampaignRecipient(db.Model):
  id=db.Column(db.Integer,primary_key=True); campaign_id=db.Column(db.Integer,db.ForeignKey('sms_campaign.id',ondelete='CASCADE'),nullable=False,index=True)
  customer_id=db.Column(db.Integer,db.ForeignKey('customer.id'),nullable=False,index=True); phone=db.Column(db.String(30),nullable=False,index=True)
  scheduled_date=db.Column(db.Date,nullable=False,index=True); status=db.Column(db.String(20),default='대기',nullable=False,index=True)
- sent_at=db.Column(db.DateTime); error=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
+ sent_at=db.Column(db.DateTime); last_attempt_at=db.Column(db.DateTime); next_attempt_at=db.Column(db.DateTime,index=True); attempt_count=db.Column(db.Integer,default=0,nullable=False); error=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
  __table_args__=(db.UniqueConstraint('campaign_id','phone',name='uq_sms_campaign_phone'),)
 
 def money(v):
@@ -291,20 +291,25 @@ def run_sms_campaigns(run_date=None, korea_hour=None):
  run_date=run_date or (datetime.utcnow()+timedelta(hours=9)).date()
  korea_hour=(datetime.utcnow()+timedelta(hours=9)).hour if korea_hour is None else korea_hour
  if korea_hour<8 or korea_hour>=21:return {'sent':0,'failed':0,'skipped':'outside_hours'}
+ now=datetime.utcnow()
  sent=failed=0
  for campaign in SmsCampaign.query.execution_options(skip_tenant=True).filter_by(status='진행중').all():
   korea_midnight=datetime.combine(run_date,datetime.min.time())-timedelta(hours=9);next_midnight=korea_midnight+timedelta(days=1)
   sent_today=SmsCampaignRecipient.query.execution_options(skip_tenant=True).filter(SmsCampaignRecipient.campaign_id==campaign.id,SmsCampaignRecipient.status=='발송완료',SmsCampaignRecipient.sent_at>=korea_midnight,SmsCampaignRecipient.sent_at<next_midnight).count()
   allowance=max(0,campaign.daily_limit-sent_today)
-  due=SmsCampaignRecipient.query.execution_options(skip_tenant=True).filter(SmsCampaignRecipient.campaign_id==campaign.id,SmsCampaignRecipient.status=='대기',SmsCampaignRecipient.scheduled_date<=run_date).order_by(SmsCampaignRecipient.scheduled_date,SmsCampaignRecipient.id).limit(allowance).all() if allowance else []
+  retryable=db.or_(SmsCampaignRecipient.status=='대기',db.and_(SmsCampaignRecipient.status=='실패',SmsCampaignRecipient.attempt_count<3,db.or_(SmsCampaignRecipient.next_attempt_at.is_(None),SmsCampaignRecipient.next_attempt_at<=now)))
+  due=SmsCampaignRecipient.query.execution_options(skip_tenant=True).filter(SmsCampaignRecipient.campaign_id==campaign.id,retryable,SmsCampaignRecipient.scheduled_date<=run_date).order_by(SmsCampaignRecipient.scheduled_date,SmsCampaignRecipient.id).limit(allowance).all() if allowance else []
   for recipient in due:
    customer=Customer.query.execution_options(skip_tenant=True).filter_by(id=recipient.customer_id,company_code=campaign.company_code).first()
    if not customer or not customer.marketing_consent or customer.marketing_opt_out_at or normalize_phone(customer.phone)!=recipient.phone:
     recipient.status='제외';recipient.error='수신동의 철회 또는 고객정보 변경';continue
+   recipient.attempt_count=(recipient.attempt_count or 0)+1;recipient.last_attempt_at=now
    if _send_sms(recipient.phone,marketing_sms_text(campaign)):
-    recipient.status='발송완료';recipient.sent_at=datetime.utcnow();recipient.error=None;sent+=1
-   else:recipient.status='실패';recipient.error='문자 발송사 처리 실패';failed+=1
-  if SmsCampaignRecipient.query.execution_options(skip_tenant=True).filter_by(campaign_id=campaign.id,status='대기').count()==0:campaign.status='완료'
+    recipient.status='발송완료';recipient.sent_at=now;recipient.next_attempt_at=None;recipient.error=None;sent+=1
+   else:
+    recipient.status='실패';recipient.next_attempt_at=now+timedelta(minutes=15*recipient.attempt_count);recipient.error=f'문자 발송사 처리 실패 ({recipient.attempt_count}/3회)';failed+=1
+  unfinished=SmsCampaignRecipient.query.execution_options(skip_tenant=True).filter(SmsCampaignRecipient.campaign_id==campaign.id,SmsCampaignRecipient.status.in_(['대기','실패']),SmsCampaignRecipient.attempt_count<3).count()
+  if unfinished==0:campaign.status='완료'
   db.session.commit()
  return {'sent':sent,'failed':failed}
 
@@ -638,6 +643,7 @@ def seed_masters():
 
 def prepare_database():
  db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)','marketing_consent':'BOOLEAN DEFAULT FALSE','marketing_consent_at':'TIMESTAMP','marketing_opt_out_at':'TIMESTAMP'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale()
+ _add_columns('sms_campaign_recipient',{'last_attempt_at':'TIMESTAMP','next_attempt_at':'TIMESTAMP','attempt_count':'INTEGER DEFAULT 0'})
  if db.engine.dialect.name=='postgresql':
   try:
    names={x.get('name') for x in db.inspect(db.engine).get_unique_constraints('user')}
