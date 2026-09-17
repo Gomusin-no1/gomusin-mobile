@@ -89,7 +89,7 @@ class Branch(db.Model):
  company_code=db.Column(db.String(50),default='trustflow',nullable=False,index=True); active=db.Column(db.Boolean,default=True,nullable=False); memo=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
 class Customer(db.Model):
  id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),nullable=False); phone=db.Column(db.String(30),index=True); device=db.Column(db.String(100)); carrier=db.Column(db.String(30)); status=db.Column(db.String(30),default='상담중',nullable=False); memo=db.Column(db.Text)
- company_code=db.Column(db.String(50),default='trustflow',nullable=False,index=True); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id'),index=True)
+ company_code=db.Column(db.String(50),default='trustflow',nullable=False,index=True); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id'),index=True); customer_type=db.Column(db.String(30),default='기존손님',nullable=False,index=True)
  address_road=db.Column(db.String(255),index=True); address_jibun=db.Column(db.String(255),index=True); address_detail=db.Column(db.String(255)); address_key=db.Column(db.String(255),index=True)
  marketing_consent=db.Column(db.Boolean,default=False,nullable=False,index=True); marketing_consent_at=db.Column(db.DateTime); marketing_opt_out_at=db.Column(db.DateTime,index=True)
  created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False); updated_at=db.Column(db.DateTime,default=datetime.utcnow,onupdate=datetime.utcnow,nullable=False)
@@ -642,7 +642,7 @@ def seed_masters():
  db.session.commit()
 
 def prepare_database():
- db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)','marketing_consent':'BOOLEAN DEFAULT FALSE','marketing_consent_at':'TIMESTAMP','marketing_opt_out_at':'TIMESTAMP'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale()
+ db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','customer_type':"VARCHAR(30) DEFAULT '기존손님'",'address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)','marketing_consent':'BOOLEAN DEFAULT FALSE','marketing_consent_at':'TIMESTAMP','marketing_opt_out_at':'TIMESTAMP'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale()
  _add_columns('sms_campaign_recipient',{'last_attempt_at':'TIMESTAMP','next_attempt_at':'TIMESTAMP','attempt_count':'INTEGER DEFAULT 0'})
  if db.engine.dialect.name=='postgresql':
   try:
@@ -922,15 +922,47 @@ def card_sales_webhook(terminal_number):
 @app.route('/ob-management')
 @login_required
 def ob_management():
- cutoff=date.today()-timedelta(days=548); sq=apply_branch_scope(Sale.query,Sale).filter(Sale.opening_date<=cutoff).order_by(Sale.opening_date.asc()).all(); latest={}
- for s in sq:
+ rows,latest,last_logs,filters=ob_customer_rows()
+ return render_template('ob_management.html',rows=rows,last_logs=last_logs,filters=filters,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all())
+
+def ob_customer_rows():
+ age=request.args.get('age','18');customer_type=request.args.get('customer_type','').strip();branch_id=scoped_branch_from_request();start=parse_date(request.args.get('start'));end=parse_date(request.args.get('end'))
+ cutoff=add_months(date.today(),-30 if age=='30' else -18) if age in ['18','30'] else None
+ sq=apply_branch_scope(Sale.query,Sale)
+ if branch_id:sq=sq.filter(Sale.branch_id==branch_id)
+ latest={}
+ for s in sq.order_by(Sale.opening_date.desc(),Sale.id.desc()).all():
   key=normalize_phone(s.customer_phone)
-  if key and (key not in latest or s.opening_date>latest[key].opening_date):latest[key]=s
- customers={normalize_phone(c.phone):c for c in Customer.query.filter(Customer.phone.in_(list(latest.keys()) or ['__none__'])).all()}; logs=apply_branch_scope(ContactLog.query,ContactLog)
+  if key:latest.setdefault(key,s)
+ customers={normalize_phone(c.phone):c for c in customer_query_scoped().filter(Customer.phone.in_(list(latest.keys()) or ['__none__'])).all()}
+ rows=[]
+ for phone,sale in latest.items():
+  customer=customers.get(phone)
+  if not customer or (cutoff and sale.opening_date>cutoff) or (start and sale.opening_date<start) or (end and sale.opening_date>end):continue
+  if customer_type and customer.customer_type!=customer_type:continue
+  rows.append((customer,sale))
+ logs=apply_branch_scope(ContactLog.query,ContactLog)
  if not is_admin():logs=logs.filter_by(branch_id=current_branch_id())
  last_logs={}
  for x in logs.order_by(ContactLog.contacted_at.desc()).all():last_logs.setdefault(x.customer_id,x)
- return render_template('ob_management.html',rows=[(customers.get(p),s) for p,s in latest.items() if customers.get(p)],last_logs=last_logs,cutoff=cutoff,branches={b.id:b for b in Branch.query.all()})
+ filters={'age':age,'customer_type':customer_type,'branch_id':branch_id,'start':start.isoformat() if start else '','end':end.isoformat() if end else '','cutoff':cutoff}
+ return sorted(rows,key=lambda x:x[1].opening_date),latest,last_logs,filters
+
+@app.get('/ob-management.xlsx')
+@login_required
+def ob_management_export():
+ from openpyxl import Workbook
+ from openpyxl.styles import Font,PatternFill,Alignment
+ rows,latest,last_logs,filters=ob_customer_rows();branch_names={b.id:b.name for b in Branch.query.all()};wb=Workbook();ws=wb.active;ws.title='OB 대상 고객'
+ ws.append(['고객명','연락처','고객유형','최근 개통일','경과개월','지점','단말기','담당자','최근 통화결과','다음 연락일'])
+ for cell in ws[1]:cell.font=Font(bold=True,color='FFFFFF');cell.fill=PatternFill('solid',fgColor='14324A');cell.alignment=Alignment(horizontal='center')
+ for customer,sale in rows:
+  log=last_logs.get(customer.id);months=(date.today().year-sale.opening_date.year)*12+date.today().month-sale.opening_date.month
+  ws.append([customer.name,customer.phone,customer.customer_type,sale.opening_date,months,branch_names.get(sale.branch_id,'-'),sale.device or '',log.staff_name if log else (sale.assigned_staff or ''),log.outcome if log else '미접촉',log.next_contact_date if log else None])
+ ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
+ for col,w in zip('ABCDEFGHIJ',[16,16,13,14,12,16,20,14,16,14]):ws.column_dimensions[col].width=w
+ audit('OB 고객 엑셀 다운로드','customer','ob',f'{len(rows)}명');db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
+ return send_file(out,as_attachment=True,download_name=f'TrustFlow_OB고객_{date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 @app.post('/customers/<int:cid>/contact-log')
 @login_required
@@ -1122,7 +1154,7 @@ def customer_new():
   if not bid:flash('고객을 등록할 지점을 선택해주세요.','error');return redirect(url_for('customer_new'))
   enforce_branch(bid)
   consent=request.form.get('marketing_consent')=='on'
-  db.session.add(Customer(name=name,phone=normalize_phone(request.form.get('phone','')),carrier=request.form.get('carrier',''),status=request.form.get('status','상담중'),memo=request.form.get('memo',''),address_road=road,address_jibun=jibun,address_detail=detail,address_key=key,branch_id=int(bid),company_code=current_company(),marketing_consent=consent,marketing_consent_at=datetime.utcnow() if consent else None));db.session.commit();flash('고객이 등록되었습니다.','success');return redirect(url_for('customers'))
+  db.session.add(Customer(name=name,phone=normalize_phone(request.form.get('phone','')),carrier=request.form.get('carrier',''),status=request.form.get('status','상담중'),customer_type=request.form.get('customer_type','기존손님'),memo=request.form.get('memo',''),address_road=road,address_jibun=jibun,address_detail=detail,address_key=key,branch_id=int(bid),company_code=current_company(),marketing_consent=consent,marketing_consent_at=datetime.utcnow() if consent else None));db.session.commit();flash('고객이 등록되었습니다.','success');return redirect(url_for('customers'))
  return render_template('customer_form.html',customer=None,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all())
 @app.route('/customers/<int:cid>/edit',methods=['GET','POST'])
 @login_required
@@ -1134,7 +1166,7 @@ def customer_edit(cid):
   bid=current_branch_id() if not is_admin() else (request.form.get('branch_id') or c.branch_id)
   enforce_branch(bid)
   old_consent=c.marketing_consent;consent=request.form.get('marketing_consent')=='on'
-  c.name=request.form.get('name','').strip();c.phone=normalize_phone(request.form.get('phone',''));c.carrier=request.form.get('carrier','');c.status=request.form.get('status','상담중');c.memo=request.form.get('memo','');c.address_road=road;c.address_jibun=jibun;c.address_detail=detail;c.address_key=key;c.branch_id=int(bid);c.marketing_consent=consent
+  c.name=request.form.get('name','').strip();c.phone=normalize_phone(request.form.get('phone',''));c.carrier=request.form.get('carrier','');c.status=request.form.get('status','상담중');c.customer_type=request.form.get('customer_type','기존손님');c.memo=request.form.get('memo','');c.address_road=road;c.address_jibun=jibun;c.address_detail=detail;c.address_key=key;c.branch_id=int(bid);c.marketing_consent=consent
   if consent and not old_consent:c.marketing_consent_at=datetime.utcnow();c.marketing_opt_out_at=None
   if old_consent and not consent:c.marketing_opt_out_at=datetime.utcnow()
   db.session.commit();flash('고객정보가 수정되었습니다.','success');return redirect(url_for('customers'))
