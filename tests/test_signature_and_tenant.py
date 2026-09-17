@@ -11,7 +11,7 @@ os.environ['ADMIN_USERNAME']=''
 os.environ['ADMIN_PASSWORD']=''
 
 from werkzeug.security import generate_password_hash, check_password_hash
-from app import app, db, User, Branch, Customer, Inventory, InventoryMovement, Sale, WiredSale, CashLedger, AccountRequest, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months
+from app import app, db, User, Branch, Customer, CustomerTask, Inventory, InventoryMovement, Sale, WiredSale, CashLedger, AccountRequest, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months
 
 
 class SignatureAndTenantTest(unittest.TestCase):
@@ -144,6 +144,21 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.login_as_a();response=self.client.get('/ob-management.xlsx?age=18&customer_type=로드손님')
   self.assertEqual(200,response.status_code);book=load_workbook(io.BytesIO(response.data),read_only=True);content=' '.join(str(cell or '') for row in book.active.iter_rows(values_only=True) for cell in row)
   self.assertIn('OB 엑셀고객',content);self.assertIn('로드손님',content);self.assertIn('담당직원',content)
+
+ def test_customer_profile_saves_hobbies_and_interests(self):
+  self.login_as_a();response=self.client.post('/customers/new',data={'name':'관심고객','phone':'01077771111','branch_id':self.a_branch,'customer_type':'성지손님','hobbies':'낚시, 골프','interests':'카메라, 인터넷 결합'},follow_redirects=False)
+  self.assertEqual(302,response.status_code)
+  with app.app_context():
+   customer=Customer.query.filter_by(name='관심고객').one();self.assertEqual(('성지손님','낚시, 골프','카메라, 인터넷 결합'),(customer.customer_type,customer.hobbies,customer.interests))
+
+ def test_next_contact_date_creates_single_followup_task(self):
+  followup=date.today()+timedelta(days=3)
+  with app.app_context():
+   customer=Customer.query.filter_by(company_code='company-a').first();db.session.add(Sale(customer_name=customer.name,customer_phone=customer.phone,opening_date=date.today(),branch_id=self.a_branch));db.session.commit();customer_id=customer.id
+  self.login_as_a();payload={'channel':'전화','outcome':'재통화','note':'요금제 변경 재안내','next_contact_date':followup.isoformat(),'branch_id':self.a_branch}
+  self.client.post(f'/customers/{customer_id}/contact-log',data=payload);self.client.post(f'/customers/{customer_id}/contact-log',data=payload)
+  with app.app_context():
+   tasks=CustomerTask.query.filter_by(customer_id=customer_id,task_type='OB 재연락',due_date=followup).all();self.assertEqual(1,len(tasks));self.assertEqual('요금제 변경 재안내',tasks[0].description)
 
  def test_admin_backup_excludes_other_company_records(self):
   from openpyxl import load_workbook
