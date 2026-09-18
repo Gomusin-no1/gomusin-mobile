@@ -11,7 +11,7 @@ os.environ['ADMIN_USERNAME']=''
 os.environ['ADMIN_PASSWORD']=''
 
 from werkzeug.security import generate_password_hash, check_password_hash
-from app import app, db, User, Branch, BranchMonthlyTarget, Customer, CustomerTask, Inventory, InventoryMovement, DeviceMaster, Sale, WiredSale, CashLedger, AccountRequest, AuditLog, Price, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months
+from app import app, db, User, Branch, BranchMonthlyTarget, Customer, CustomerTask, Inventory, InventoryMovement, DeviceMaster, Sale, SaleAddon, WiredSale, CashLedger, AccountRequest, AuditLog, Price, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months, addon_rule_for_carrier, resolved_addon_rule
 
 
 class SignatureAndTenantTest(unittest.TestCase):
@@ -47,6 +47,20 @@ class SignatureAndTenantTest(unittest.TestCase):
  def test_date_calculator_treats_leading_zero_as_day_count(self):
   self.login_as_a();response=self.client.get('/date-calculator?base=2026-09-14&days=0185')
   self.assertEqual(200,response.status_code);self.assertIn('185일'.encode(),response.data);self.assertIn('2027년 03월 18일'.encode(),response.data)
+
+ def test_carrier_addon_rules_resolve_to_operating_defaults(self):
+  self.assertEqual('M+1',addon_rule_for_carrier('SK'))
+  self.assertEqual('D+95',addon_rule_for_carrier('LG U+'))
+  self.assertEqual('M+3',addon_rule_for_carrier('KT'))
+  self.assertEqual('D+30',resolved_addon_rule('D+30','LG'))
+
+ def test_sale_auto_addon_rule_is_saved_as_resolved_rule(self):
+  self.login_as_a();opening=date(2026,1,31)
+  response=self.client.post('/sales/new',data={'customer_name':'자동해지 고객','customer_phone':'01077778888','branch_id':str(self.a_branch),'opening_date':opening.isoformat(),'carrier':'SK','opening_type':'기기변경','addon_name[]':'콜키퍼','addon_rule[]':'AUTO'},follow_redirects=False)
+  self.assertEqual(302,response.status_code)
+  with app.app_context():
+   addon=SaleAddon.query.one();self.assertEqual('M+1',addon.retention_rule);self.assertEqual(date(2026,2,28),addon.cancellation_due_date)
+   task=CustomerTask.query.filter_by(task_type='부가서비스 해지').one();self.assertEqual(date(2026,2,28),task.due_date);self.assertIn('M+1',task.description)
 
  def test_company_customer_list_is_isolated(self):
   self.login_as_a();response=self.client.get('/customers')
