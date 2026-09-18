@@ -13,7 +13,7 @@ os.environ['ADMIN_USERNAME']=''
 os.environ['ADMIN_PASSWORD']=''
 
 from werkzeug.security import generate_password_hash, check_password_hash
-from app import app, db, User, Branch, BranchMonthlyTarget, Customer, CustomerTask, ContactLog, Inventory, InventoryMovement, DeviceMaster, Sale, SaleAddon, WiredSale, CashLedger, AccountRequest, AuditLog, Price, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months, addon_rule_for_carrier, resolved_addon_rule, task_due_stage
+from app import app, db, User, Branch, BranchMonthlyTarget, Customer, CustomerTask, ContactLog, Booking, Inventory, InventoryMovement, DeviceMaster, Sale, SaleAddon, WiredSale, CashLedger, AccountRequest, AuditLog, Price, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months, addon_rule_for_carrier, resolved_addon_rule, task_due_stage
 
 
 class SignatureAndTenantTest(unittest.TestCase):
@@ -140,6 +140,19 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.client.post(f'/tasks/{task_id}/status',data={'status':'연락안됨'},follow_redirects=False)
   with app.app_context():
    logs=ContactLog.query.filter_by(customer_id=customer_id,outcome='연락안됨').all();self.assertEqual(1,len(logs));self.assertIn('카카오채널',logs[0].note)
+
+ def test_booking_is_store_scoped_and_shown_on_dashboard(self):
+  visit=f'{date.today().isoformat()}T14:30'
+  self.login_as_a();response=self.client.post('/bookings',data={'branch_id':str(self.a_branch),'name':'A 예약고객','phone':'010-7777-8888','visit_date':visit,'device':'갤럭시 S26'},follow_redirects=False)
+  self.assertEqual(302,response.status_code)
+  with app.app_context():
+   own=Booking.query.execution_options(skip_tenant=True).filter_by(name='A 예약고객').one();self.assertEqual(('company-a',self.a_branch,'01077778888','예약'),(own.company_code,own.branch_id,own.phone,own.status))
+   db.session.add_all([Booking(name='A 타지점예약',visit_date=visit,company_code='company-a',branch_id=self.a2_branch),Booking(name='B 비공개예약',visit_date=visit,company_code='company-b',branch_id=self.b_branch)]);db.session.commit()
+  dashboard=self.client.get('/');self.assertIn('A 예약고객'.encode(),dashboard.data);self.assertIn('A 타지점예약'.encode(),dashboard.data);self.assertNotIn('B 비공개예약'.encode(),dashboard.data)
+  with app.app_context():user=db.session.get(User,self.a_user);user.role='staff';user.branch_id=self.a_branch;db.session.commit()
+  listing=self.client.get('/bookings');self.assertIn('A 예약고객'.encode(),listing.data);self.assertNotIn('A 타지점예약'.encode(),listing.data);self.assertNotIn('B 비공개예약'.encode(),listing.data)
+  with app.app_context():foreign_store=Booking.query.execution_options(skip_tenant=True).filter_by(name='A 타지점예약').one().id
+  self.assertEqual(403,self.client.post(f'/bookings/{foreign_store}/status',data={'status':'방문완료'}).status_code)
 
  def test_deactivated_user_session_is_revoked_on_next_request(self):
   self.login_as_a()
