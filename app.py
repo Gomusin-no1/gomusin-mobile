@@ -1639,7 +1639,7 @@ def partner_delete(pid):
 @app.route('/sales/new',methods=['GET','POST'])
 @login_required
 def sale_new():
- prepare_database(); staff=(User.query.filter_by(active=True,branch_id=current_branch_id()).order_by(User.display_name).all() if not is_admin() else User.query.filter_by(active=True).order_by(User.display_name,User.username).all());partners=Partner.query.filter_by(active=True).order_by(Partner.name).all();branches=(Branch.query.filter_by(id=current_branch_id()).all() if not is_admin() else Branch.query.filter_by(active=True).order_by(Branch.id).all());plans=PlanMaster.query.filter_by(active=True).order_by(PlanMaster.carrier,PlanMaster.sort_order,PlanMaster.name).all(); plan_data=[{'carrier':p.carrier,'name':p.name} for p in plans]
+ prepare_database(); staff=(User.query.filter_by(active=True,branch_id=current_branch_id()).order_by(User.display_name).all() if not is_admin() else User.query.filter_by(active=True).order_by(User.display_name,User.username).all());partners=Partner.query.filter_by(active=True).order_by(Partner.name).all();branches=(Branch.query.filter_by(id=current_branch_id()).all() if not is_admin() else Branch.query.filter_by(active=True).order_by(Branch.id).all());plans=PlanMaster.query.filter_by(active=True).order_by(PlanMaster.carrier,PlanMaster.sort_order,PlanMaster.name).all(); plan_data=[{'carrier':p.carrier,'name':p.name} for p in plans]; devices=DeviceMaster.query.filter_by(active=True).order_by(DeviceMaster.manufacturer,DeviceMaster.sort_order,DeviceMaster.model).all(); device_data=[{'manufacturer':d.manufacturer,'model':d.model,'capacities':d.capacities or '','colors':d.colors or ''} for d in devices]
  if request.method=='POST':
   name=request.form.get('customer_name','').strip(); opening=parse_date(request.form.get('opening_date')) or date.today()
   if not name:flash('고객명을 입력해주세요.','error');return redirect(url_for('sale_new'))
@@ -1680,7 +1680,7 @@ def sale_new():
    if payback_due:db.session.add(CustomerTask(customer_id=customer.id,sale_id=sale.id,task_type='페이백 지급',title=f'{name} 페이백 지급',description=f'{payback:,}원',due_date=payback_due,assigned_staff=sale.assigned_staff,auto_created=True))
   db.session.commit();flash('개통 등록이 완료되었습니다. 재고·판매일보·고객약속·페이백이 자동 반영되었습니다.','success');return redirect(url_for('sales'))
  price_data=[{'id':p.id,'device':p.device,'carrier':p.carrier,'sale_type':p.sale_type,'price':p.price,'rebate_amount':p.rebate_amount or money(p.price)} for p in Price.query.order_by(Price.device,Price.carrier,Price.sale_type).all()]
- return render_template('sale_form.html',staff=staff,partners=partners,branches=branches,today=date.today().isoformat(),sale=None,plans=plans,plan_data=plan_data,price_data=price_data)
+ return render_template('sale_form.html',staff=staff,partners=partners,branches=branches,today=date.today().isoformat(),sale=None,plans=plans,plan_data=plan_data,price_data=price_data,device_data=device_data)
 
 
 def _customer_for_sale(sale):
@@ -1720,7 +1720,7 @@ def _rebuild_sale_automation(sale,form):
 def sale_edit(sid):
  sale=Sale.query.get_or_404(sid)
  enforce_branch(sale.branch_id)
- staff=(User.query.filter_by(active=True,branch_id=current_branch_id()).order_by(User.display_name).all() if not is_admin() else User.query.filter_by(active=True).order_by(User.display_name,User.username).all()); partners=Partner.query.filter_by(active=True).order_by(Partner.name).all(); branches=(Branch.query.filter_by(id=current_branch_id()).all() if not is_admin() else Branch.query.filter_by(active=True).order_by(Branch.id).all()); plans=PlanMaster.query.filter_by(active=True).order_by(PlanMaster.carrier,PlanMaster.sort_order,PlanMaster.name).all(); plan_data=[{'carrier':p.carrier,'name':p.name} for p in plans]
+ staff=(User.query.filter_by(active=True,branch_id=current_branch_id()).order_by(User.display_name).all() if not is_admin() else User.query.filter_by(active=True).order_by(User.display_name,User.username).all()); partners=Partner.query.filter_by(active=True).order_by(Partner.name).all(); branches=(Branch.query.filter_by(id=current_branch_id()).all() if not is_admin() else Branch.query.filter_by(active=True).order_by(Branch.id).all()); plans=PlanMaster.query.filter_by(active=True).order_by(PlanMaster.carrier,PlanMaster.sort_order,PlanMaster.name).all(); plan_data=[{'carrier':p.carrier,'name':p.name} for p in plans]; devices=DeviceMaster.query.filter_by(active=True).order_by(DeviceMaster.manufacturer,DeviceMaster.sort_order,DeviceMaster.model).all(); device_data=[{'manufacturer':d.manufacturer,'model':d.model,'capacities':d.capacities or '','colors':d.colors or ''} for d in devices]
  if request.method=='POST':
   old_inv=Inventory.query.get(sale.inventory_id) if sale.inventory_id else None
   serial=request.form.get('serial_number','').strip(); new_inv=Inventory.query.filter_by(serial_number=serial).first() if serial else None
@@ -1749,7 +1749,7 @@ def sale_edit(sid):
   _rebuild_sale_automation(sale,request.form); db.session.commit()
   flash('판매일보가 수정되었고 고객약속·페이백·재고 연결도 함께 갱신되었습니다.','success'); return redirect(url_for('sales'))
  addons=SaleAddon.query.filter_by(sale_id=sale.id).order_by(SaleAddon.id).all(); pb=Payback.query.filter_by(sale_id=sale.id).first()
- return render_template('sale_edit.html',sale=sale,addons=addons,payback=pb,staff=staff,partners=partners,branches=branches,plans=plans,plan_data=plan_data)
+ return render_template('sale_edit.html',sale=sale,addons=addons,payback=pb,staff=staff,partners=partners,branches=branches,plans=plans,plan_data=plan_data,device_data=device_data)
 
 def filtered_sales(args):
  q=args.get('q','').strip();day=args.get('date','').strip();month=args.get('month','').strip();branch_id=args.get('branch_id','').strip();settlement_status=args.get('settlement_status','').strip();settlement_age=args.get('settlement_age','').strip();staff_name=args.get('staff','').strip()
