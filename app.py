@@ -105,6 +105,7 @@ class Sale(db.Model):
  id=db.Column(db.Integer,primary_key=True)
  customer_name=db.Column(db.String(100),nullable=False); customer_phone=db.Column(db.String(30)); customer_birth=db.Column(db.String(20)); customer_gender=db.Column(db.String(10)); opening_date=db.Column(db.Date,default=date.today,nullable=False); carrier=db.Column(db.String(30)); opening_type=db.Column(db.String(30)); status=db.Column(db.String(30),default='개통완료',nullable=False); opening_number=db.Column(db.String(50)); manufacturer=db.Column(db.String(50)); device=db.Column(db.String(100)); color=db.Column(db.String(50)); storage=db.Column(db.String(50)); imei=db.Column(db.String(100)); serial_number=db.Column(db.String(100)); plan=db.Column(db.String(100)); contract_type=db.Column(db.String(50)); installment_months=db.Column(db.String(20)); selection_discount=db.Column(db.String(20)); device_price=db.Column(db.String(50)); official_subsidy=db.Column(db.String(50)); additional_subsidy=db.Column(db.String(50)); seller_subsidy=db.Column(db.String(50)); subsidy=db.Column(db.String(50)); installment_price=db.Column(db.String(50)); cash_price=db.Column(db.String(50)); monthly_installment=db.Column(db.String(50)); monthly_payment=db.Column(db.String(50)); settlement=db.Column(db.String(50)); margin=db.Column(db.String(50)); additional_services=db.Column(db.Text); service_period=db.Column(db.String(50)); gifts=db.Column(db.Text); gift_status=db.Column(db.String(30)); aftercare_status=db.Column(db.String(50)); old_device=db.Column(db.String(100)); old_device_return=db.Column(db.String(20)); trade_in_price=db.Column(db.String(50)); assigned_staff=db.Column(db.String(50)); created_by=db.Column(db.String(50)); memo=db.Column(db.Text)
  partner_id=db.Column(db.Integer,db.ForeignKey('partner.id')); inventory_id=db.Column(db.Integer,db.ForeignKey('inventory.id')); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id')); visit_source=db.Column(db.String(50)); current_plan=db.Column(db.String(100)); next_plan=db.Column(db.String(100)); plan_change_due_date=db.Column(db.Date); rebate=db.Column(db.Integer,default=0); verbal_extra=db.Column(db.Integer,default=0); deduction=db.Column(db.Integer,default=0); extra_support=db.Column(db.Integer,default=0); settlement_amount_v2=db.Column(db.Integer,default=0); tax_rate=db.Column(db.Float,default=0.133); tax_amount=db.Column(db.Integer,default=0); customer_payback=db.Column(db.Integer,default=0); transfer_fee=db.Column(db.Integer,default=0); sim_payment_type=db.Column(db.String(20),default='없음'); sim_fee=db.Column(db.Integer,default=7700); final_margin=db.Column(db.Integer,default=0); internet_carrier=db.Column(db.String(30)); internet_subscriber=db.Column(db.String(100)); internet_install_date=db.Column(db.Date); internet_cancel_due_date=db.Column(db.Date); payback_due_date=db.Column(db.Date); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False); updated_at=db.Column(db.DateTime,default=datetime.utcnow,onupdate=datetime.utcnow,nullable=False)
+ settlement_status=db.Column(db.String(20),default='미지급',nullable=False,index=True); settlement_checked_at=db.Column(db.DateTime); settlement_checked_by=db.Column(db.String(50))
 class SaleAddon(db.Model):
  id=db.Column(db.Integer,primary_key=True); sale_id=db.Column(db.Integer,db.ForeignKey('sale.id',ondelete='CASCADE'),nullable=False,index=True); name=db.Column(db.String(100),nullable=False); retention_rule=db.Column(db.String(30)); cancellation_due_date=db.Column(db.Date); created_at=db.Column(db.DateTime,default=datetime.utcnow)
 class CustomerTask(db.Model):
@@ -522,7 +523,7 @@ def upgrade_existing_sale():
   'tax_amount':'INTEGER DEFAULT 0','customer_payback':'INTEGER DEFAULT 0','transfer_fee':'INTEGER DEFAULT 0',
   'sim_payment_type':"VARCHAR(20) DEFAULT '없음'",'sim_fee':'INTEGER DEFAULT 7700','final_margin':'INTEGER DEFAULT 0',
   'internet_carrier':'VARCHAR(30)','internet_subscriber':'VARCHAR(100)','internet_install_date':'DATE',
-  'internet_cancel_due_date':'DATE','payback_due_date':'DATE','created_at':'TIMESTAMP','updated_at':'TIMESTAMP'
+  'internet_cancel_due_date':'DATE','payback_due_date':'DATE','settlement_status':"VARCHAR(20) DEFAULT '미지급'",'settlement_checked_at':'TIMESTAMP','settlement_checked_by':'VARCHAR(50)','created_at':'TIMESTAMP','updated_at':'TIMESTAMP'
  })
  _add_columns('user',{'display_name':'VARCHAR(50)','branch_id':'INTEGER','active':'BOOLEAN DEFAULT TRUE'})
  _add_columns('inventory',{'branch_id':'INTEGER'})
@@ -1607,7 +1608,7 @@ def sale_new():
   rebate=money(request.form.get('rebate'));verbal=money(request.form.get('verbal_extra'));deduct=money(request.form.get('deduction'));support=money(request.form.get('extra_support'));payback=money(request.form.get('customer_payback'));opening_type=request.form.get('opening_type');sim_type=request.form.get('sim_payment_type','없음');settlement,tax,margin,transfer_fee=calc_settlement(rebate,verbal,deduct,support,payback,opening_type,sim_type)
   plan_due=opening+timedelta(days=183) if request.form.get('next_plan','').strip() else None
   internet_due=parse_date(request.form.get('internet_cancel_due_date'));payback_due=parse_date(request.form.get('payback_due_date'))
-  sale=Sale(customer_name=name,customer_phone=phone,customer_birth=request.form.get('customer_birth'),opening_date=opening,carrier=request.form.get('carrier'),opening_type=opening_type,status='개통완료',manufacturer=(inv.manufacturer if inv else request.form.get('manufacturer')),device=(inv.model if inv else request.form.get('device')),color=(inv.color if inv else request.form.get('color')),storage=(inv.capacity if inv else request.form.get('storage')),serial_number=serial,plan=request.form.get('current_plan'),current_plan=request.form.get('current_plan'),next_plan=request.form.get('next_plan'),plan_change_due_date=plan_due,partner_id=(inv.partner_id if inv else (request.form.get('partner_id') or None)),inventory_id=(inv.id if inv else None),visit_source=request.form.get('visit_source'),branch_id=sale_branch,assigned_staff=request.form.get('assigned_staff') or session.get('display_name') or session.get('username'),created_by=session.get('display_name') or session.get('username'),rebate=rebate,verbal_extra=verbal,deduction=deduct,extra_support=support,settlement_amount_v2=settlement,tax_rate=.133,tax_amount=tax,customer_payback=payback,transfer_fee=transfer_fee,sim_payment_type=sim_type,sim_fee=7700,final_margin=margin,settlement=str(settlement),margin=str(margin),internet_carrier=request.form.get('internet_carrier'),internet_subscriber=request.form.get('internet_subscriber'),internet_install_date=parse_date(request.form.get('internet_install_date')),internet_cancel_due_date=internet_due,payback_due_date=payback_due,memo=request.form.get('memo'))
+  sale=Sale(customer_name=name,customer_phone=phone,customer_birth=request.form.get('customer_birth'),opening_date=opening,carrier=request.form.get('carrier'),opening_type=opening_type,status='개통완료',manufacturer=(inv.manufacturer if inv else request.form.get('manufacturer')),device=(inv.model if inv else request.form.get('device')),color=(inv.color if inv else request.form.get('color')),storage=(inv.capacity if inv else request.form.get('storage')),serial_number=serial,plan=request.form.get('current_plan'),current_plan=request.form.get('current_plan'),next_plan=request.form.get('next_plan'),plan_change_due_date=plan_due,partner_id=(inv.partner_id if inv else (request.form.get('partner_id') or None)),inventory_id=(inv.id if inv else None),visit_source=request.form.get('visit_source'),branch_id=sale_branch,assigned_staff=request.form.get('assigned_staff') or session.get('display_name') or session.get('username'),created_by=session.get('display_name') or session.get('username'),rebate=rebate,verbal_extra=verbal,deduction=deduct,extra_support=support,settlement_amount_v2=settlement,tax_rate=.133,tax_amount=tax,customer_payback=payback,transfer_fee=transfer_fee,sim_payment_type=sim_type,sim_fee=7700,final_margin=margin,settlement=str(settlement),margin=str(margin),settlement_status='추가금' if margin<0 else '미지급',internet_carrier=request.form.get('internet_carrier'),internet_subscriber=request.form.get('internet_subscriber'),internet_install_date=parse_date(request.form.get('internet_install_date')),internet_cancel_due_date=internet_due,payback_due_date=payback_due,memo=request.form.get('memo'))
   db.session.add(sale);db.session.flush()
   if inv:
    old_branch=inv.branch_id
@@ -1701,7 +1702,7 @@ def sale_edit(sid):
 @app.route('/sales')
 @login_required
 def sales():
- q=request.args.get('q','').strip(); day=request.args.get('date','').strip(); branch_id=request.args.get('branch_id','').strip()
+ q=request.args.get('q','').strip(); day=request.args.get('date','').strip(); month=request.args.get('month','').strip(); branch_id=request.args.get('branch_id','').strip();settlement_status=request.args.get('settlement_status','').strip();staff_name=request.args.get('staff','').strip()
  query=apply_branch_scope(Sale.query,Sale)
  if not is_admin():
   branch_id=str(current_branch_id() or ''); query=query.filter(Sale.branch_id==current_branch_id()) if current_branch_id() else query.filter(Sale.id==-1)
@@ -1711,10 +1712,24 @@ def sales():
  if day:
   d=parse_date(day)
   if d: query=query.filter(Sale.opening_date==d)
+ elif month:
+  try:start=datetime.strptime(month,'%Y-%m').date().replace(day=1);end=add_months(start,1);query=query.filter(Sale.opening_date>=start,Sale.opening_date<end)
+  except:month=''
+ if settlement_status:query=query.filter(Sale.settlement_status==settlement_status)
+ if staff_name:query=query.filter(Sale.assigned_staff==staff_name)
  if q:query=query.filter(or_(Sale.customer_name.ilike(f'%{q}%'),Sale.customer_phone.ilike(f'%{q}%'),Sale.device.ilike(f'%{q}%'),Sale.serial_number.ilike(f'%{q}%')))
  items=query.order_by(Sale.opening_date.desc(),Sale.id.desc()).all()
  doc_counts=dict(db.session.query(SaleDocument.sale_id,db.func.count(SaleDocument.id)).filter(SaleDocument.sale_id.in_([s.id for s in items] or [0])).group_by(SaleDocument.sale_id).all())
- return render_template('sales.html',sales=items,q=q,date_filter=day,branch_id=branch_id,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all(),doc_counts=doc_counts,total_settlement=sum(s.settlement_amount_v2 or money(s.settlement) for s in items),total_margin=sum(s.final_margin or money(s.margin) for s in items))
+ status_counts={status:sum(1 for s in items if (s.settlement_status or '미지급')==status) for status in ['정상','추가금','미지급']};staff_choices=sorted({s.assigned_staff for s in apply_branch_scope(Sale.query,Sale).filter(Sale.assigned_staff.isnot(None)).all() if s.assigned_staff})
+ return render_template('sales.html',sales=items,q=q,date_filter=day,month=month,branch_id=branch_id,settlement_status=settlement_status,staff_name=staff_name,staff_choices=staff_choices,status_counts=status_counts,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all(),doc_counts=doc_counts,total_settlement=sum(s.settlement_amount_v2 or money(s.settlement) for s in items),total_margin=sum(s.final_margin or money(s.margin) for s in items))
+
+@app.post('/sales/<int:sid>/settlement-status')
+@login_required
+@admin_required
+def sale_settlement_status(sid):
+ sale=Sale.query.get_or_404(sid);enforce_branch(sale.branch_id);status=request.form.get('status','')
+ if status not in ['정상','추가금','미지급']:abort(400)
+ sale.settlement_status=status;sale.settlement_checked_at=datetime.utcnow();sale.settlement_checked_by=session.get('display_name') or session.get('username');audit('판매 정산상태 변경','sale',sale.id,f'{sale.customer_name} · {status}',sale.branch_id);db.session.commit();flash(f'정산상태를 {status}(으)로 변경했습니다.','success');return redirect(request.referrer or url_for('sales'))
 
 
 @app.route('/sales/<int:sid>/documents',methods=['GET','POST'])
