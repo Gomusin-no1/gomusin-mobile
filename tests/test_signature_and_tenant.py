@@ -180,6 +180,15 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.assertIn('A 본점',body);self.assertIn('김판매',body);self.assertIn('800,000원',body);self.assertIn('200,000원',body)
   self.assertNotIn('B 비공개실적',body);self.assertNotIn('타회사직원',body)
 
+ def test_sales_settlement_filters_and_admin_status_update(self):
+  with app.app_context():
+   own=Sale(customer_name='정산대상고객',opening_date=date.today(),branch_id=self.a_branch,assigned_staff='김정산',settlement_amount_v2=500000,final_margin=120000,settlement_status='미지급');foreign=Sale(customer_name='타회사정산',opening_date=date.today(),branch_id=self.b_branch,assigned_staff='타직원',settlement_status='추가금');db.session.add_all([own,foreign]);db.session.commit();own_id=own.id
+  self.login_as_a();page=self.client.get(f'/sales?month={date.today():%Y-%m}&settlement_status=미지급&staff=김정산');body=page.get_data(as_text=True)
+  self.assertEqual(200,page.status_code);self.assertIn('정산대상고객',body);self.assertIn('미확인 정산',body);self.assertNotIn('타회사정산',body)
+  response=self.client.post(f'/sales/{own_id}/settlement-status',data={'status':'정상'},follow_redirects=True);self.assertEqual(200,response.status_code)
+  with app.app_context():
+   item=db.session.get(Sale,own_id);self.assertEqual('정상',item.settlement_status);self.assertEqual('A관리자',item.settlement_checked_by);self.assertIsNotNone(item.settlement_checked_at)
+
  def test_monthly_performance_excel_is_company_isolated(self):
   from openpyxl import load_workbook
   with app.app_context():
