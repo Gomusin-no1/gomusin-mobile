@@ -1,5 +1,7 @@
 import os
 import io
+import json
+import re
 import sys
 import unittest
 from datetime import date, datetime, timedelta
@@ -116,6 +118,13 @@ class SignatureAndTenantTest(unittest.TestCase):
    db.session.add_all([Price(device='갤럭시 S26',carrier='SK',sale_type='번호이동',price='500,000원',rebate_amount=500000,company_code='company-a'),Price(device='타회사 비공개폰',carrier='KT',sale_type='기기변경',price='900,000원',rebate_amount=900000,company_code='company-b')]);db.session.commit()
   self.login_as_a();response=self.client.get('/sales/new');body=response.get_data(as_text=True)
   self.assertEqual(200,response.status_code);self.assertIn('"rebate_amount": 500000',body);self.assertIn('단가표 자동 적용',body);self.assertNotIn('"rebate_amount": 900000',body)
+
+ def test_sale_form_provides_active_device_autocomplete(self):
+  with app.app_context():
+   db.session.add_all([DeviceMaster(manufacturer='삼성',model='갤럭시 S26 울트라',capacities='256GB,512GB',colors='블랙,화이트',active=True),DeviceMaster(manufacturer='애플',model='숨김 아이폰',active=False)]);db.session.commit()
+  self.login_as_a();response=self.client.get('/sales/new');body=response.get_data(as_text=True)
+  self.assertEqual(200,response.status_code);match=re.search(r'const saleDeviceMaster=(.*?);',body);self.assertIsNotNone(match);devices=json.loads(match.group(1));models=[x['model'] for x in devices]
+  self.assertIn('갤럭시 S26 울트라',models);self.assertNotIn('숨김 아이폰',models);self.assertEqual('256GB,512GB',next(x['capacities'] for x in devices if x['model']=='갤럭시 S26 울트라'));self.assertIn('applyDeviceMaster',body)
 
  def test_performance_report_includes_staff_workload_and_blocks_foreign_tasks(self):
   with app.app_context():
