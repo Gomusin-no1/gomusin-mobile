@@ -455,6 +455,10 @@ def payback_query_scoped():
   q=q.filter(Sale.branch_id==bid) if bid else q.filter(Payback.id==-1)
  return q
 
+def overdue_settlement_query(today=None):
+ today=today or date.today()
+ return apply_branch_scope(Sale.query,Sale).filter(Sale.opening_date<=today-timedelta(days=3),or_(Sale.settlement_status.is_(None),Sale.settlement_status!='정상'))
+
 def can_approve_payback():
  if is_admin():return True
  user_id=session.get('user_id')
@@ -465,7 +469,7 @@ def can_approve_payback():
  except:return False
 
 def notification_summary():
- if not session.get('user_id'):return {'total':0,'overdue_tasks':0,'today_tasks':0,'pending_approvals':0,'account_requests':0,'due_paybacks':0,'legal_deadlines':0,'download_alerts':0}
+ if not session.get('user_id'):return {'total':0,'overdue_tasks':0,'today_tasks':0,'pending_approvals':0,'account_requests':0,'due_paybacks':0,'legal_deadlines':0,'download_alerts':0,'overdue_settlements':0}
  today=date.today(); open_states=['처리예정','연락안됨','연기']
  overdue_tasks=task_query_scoped().filter(CustomerTask.due_date<today,CustomerTask.status.in_(open_states)).count()
  today_tasks=task_query_scoped().filter(CustomerTask.due_date==today,CustomerTask.status.in_(open_states)).count()
@@ -476,7 +480,8 @@ def notification_summary():
  legal_deadlines=lq.filter(LegalCase.status.notin_(['완료','종결']),LegalCase.demand_due_date.isnot(None),LegalCase.demand_due_date<=today+timedelta(days=3)).count()
  account_requests=AccountRequest.query.filter_by(company_code=current_company(),status='대기').count() if is_admin() else 0
  download_alerts=AuditLog.query.filter(AuditLog.action.ilike('%다운로드%'),AuditLog.created_at>=datetime.utcnow()-timedelta(days=7)).count() if is_admin() else 0
- return {'total':overdue_tasks+today_tasks+pending_approvals+account_requests+due_paybacks+legal_deadlines+download_alerts,'overdue_tasks':overdue_tasks,'today_tasks':today_tasks,'pending_approvals':pending_approvals,'account_requests':account_requests,'due_paybacks':due_paybacks,'legal_deadlines':legal_deadlines,'download_alerts':download_alerts}
+ overdue_settlements=overdue_settlement_query(today).count()
+ return {'total':overdue_tasks+today_tasks+pending_approvals+account_requests+due_paybacks+legal_deadlines+download_alerts+overdue_settlements,'overdue_tasks':overdue_tasks,'today_tasks':today_tasks,'pending_approvals':pending_approvals,'account_requests':account_requests,'due_paybacks':due_paybacks,'legal_deadlines':legal_deadlines,'download_alerts':download_alerts,'overdue_settlements':overdue_settlements}
 
 def audit(action,target_type='',target_id='',detail='',branch_id=None,commit=False):
  try:
@@ -1058,13 +1063,14 @@ def dashboard():
  for t in month_tasks: counts[t.due_date.isoformat()]=counts.get(t.due_date.isoformat(),0)+1
  sq=apply_branch_scope(Sale.query,Sale)
  today_sale_items=sq.filter(Sale.opening_date==today).order_by(Sale.id.desc()).all()
+ overdue_settlements=overdue_settlement_query(today).order_by(Sale.opening_date.asc()).limit(20).all()
  pq=payback_query_scoped()
  pending_paybacks=pq.filter(Payback.status!='완료').count()
  today_paybacks=payback_query_scoped().filter(Payback.due_date==today,Payback.status!='완료').all()
  branches={b.id:b for b in Branch.query.all()}
  sales_map={s.id:s for s in Sale.query.filter(Sale.id.in_([p.sale_id for p in today_paybacks] or [0])).all()}
  cal=calendar.Calendar(firstweekday=6); weeks=cal.monthdayscalendar(today.year,today.month)
- return render_template('dashboard.html',today=today,selected=selected,tasks=tasks,overdue=overdue,counts=counts,weeks=weeks,year=today.year,month=today.month,today_sales=len(today_sale_items),today_sale_items=today_sale_items,pending_paybacks=pending_paybacks,today_paybacks=today_paybacks,sales_map=sales_map,branches=branches)
+ return render_template('dashboard.html',today=today,selected=selected,tasks=tasks,overdue=overdue,overdue_settlements=overdue_settlements,counts=counts,weeks=weeks,year=today.year,month=today.month,today_sales=len(today_sale_items),today_sale_items=today_sale_items,pending_paybacks=pending_paybacks,today_paybacks=today_paybacks,sales_map=sales_map,branches=branches)
 
 @app.get('/notifications')
 @login_required
@@ -1080,7 +1086,8 @@ def notifications():
  customer_ids=list({x.customer_id for x in legal_deadlines if x.customer_id}); customer_map={c.id:c for c in Customer.query.filter(Customer.id.in_(customer_ids or [0])).all()}
  account_requests=AccountRequest.query.filter_by(company_code=current_company(),status='대기').order_by(AccountRequest.created_at.asc()).limit(100).all() if is_admin() else []
  download_alerts=AuditLog.query.filter(AuditLog.action.ilike('%다운로드%'),AuditLog.created_at>=datetime.utcnow()-timedelta(days=7)).order_by(AuditLog.created_at.desc()).limit(100).all() if is_admin() else []
- return render_template('notifications.html',today=today,overdue_tasks=overdue_tasks,today_tasks=today_tasks,due_paybacks=due_paybacks,pending_approvals=pending_approvals,account_requests=account_requests,legal_deadlines=legal_deadlines,sales_map=sales_map,customer_map=customer_map,download_alerts=download_alerts)
+ overdue_settlements=overdue_settlement_query(today).order_by(Sale.opening_date.asc()).limit(100).all()
+ return render_template('notifications.html',today=today,overdue_tasks=overdue_tasks,today_tasks=today_tasks,due_paybacks=due_paybacks,pending_approvals=pending_approvals,account_requests=account_requests,legal_deadlines=legal_deadlines,sales_map=sales_map,customer_map=customer_map,download_alerts=download_alerts,overdue_settlements=overdue_settlements)
 
 @app.post('/tasks/<int:task_id>/status')
 @login_required
@@ -1725,7 +1732,7 @@ def sale_edit(sid):
  return render_template('sale_edit.html',sale=sale,addons=addons,payback=pb,staff=staff,partners=partners,branches=branches,plans=plans,plan_data=plan_data)
 
 def filtered_sales(args):
- q=args.get('q','').strip();day=args.get('date','').strip();month=args.get('month','').strip();branch_id=args.get('branch_id','').strip();settlement_status=args.get('settlement_status','').strip();staff_name=args.get('staff','').strip()
+ q=args.get('q','').strip();day=args.get('date','').strip();month=args.get('month','').strip();branch_id=args.get('branch_id','').strip();settlement_status=args.get('settlement_status','').strip();settlement_age=args.get('settlement_age','').strip();staff_name=args.get('staff','').strip()
  query=apply_branch_scope(Sale.query,Sale)
  if not is_admin():
   branch_id=str(current_branch_id() or ''); query=query.filter(Sale.branch_id==current_branch_id()) if current_branch_id() else query.filter(Sale.id==-1)
@@ -1739,17 +1746,18 @@ def filtered_sales(args):
   try:start=datetime.strptime(month,'%Y-%m').date().replace(day=1);end=add_months(start,1);query=query.filter(Sale.opening_date>=start,Sale.opening_date<end)
   except:month=''
  if settlement_status:query=query.filter(Sale.settlement_status==settlement_status)
+ if settlement_age=='overdue':query=query.filter(Sale.opening_date<=date.today()-timedelta(days=3),or_(Sale.settlement_status.is_(None),Sale.settlement_status!='정상'))
  if staff_name:query=query.filter(Sale.assigned_staff==staff_name)
  if q:query=query.filter(or_(Sale.customer_name.ilike(f'%{q}%'),Sale.customer_phone.ilike(f'%{q}%'),Sale.device.ilike(f'%{q}%'),Sale.serial_number.ilike(f'%{q}%')))
- return query.order_by(Sale.opening_date.desc(),Sale.id.desc()).all(),{'q':q,'day':day,'month':month,'branch_id':branch_id,'settlement_status':settlement_status,'staff_name':staff_name}
+ return query.order_by(Sale.opening_date.desc(),Sale.id.desc()).all(),{'q':q,'day':day,'month':month,'branch_id':branch_id,'settlement_status':settlement_status,'settlement_age':settlement_age,'staff_name':staff_name}
 
 @app.route('/sales')
 @login_required
 def sales():
- items,filters=filtered_sales(request.args);q=filters['q'];day=filters['day'];month=filters['month'];branch_id=filters['branch_id'];settlement_status=filters['settlement_status'];staff_name=filters['staff_name']
+ items,filters=filtered_sales(request.args);q=filters['q'];day=filters['day'];month=filters['month'];branch_id=filters['branch_id'];settlement_status=filters['settlement_status'];settlement_age=filters['settlement_age'];staff_name=filters['staff_name']
  doc_counts=dict(db.session.query(SaleDocument.sale_id,db.func.count(SaleDocument.id)).filter(SaleDocument.sale_id.in_([s.id for s in items] or [0])).group_by(SaleDocument.sale_id).all())
  status_counts={status:sum(1 for s in items if (s.settlement_status or '미지급')==status) for status in ['정상','추가금','미지급']};staff_choices=sorted({s.assigned_staff for s in apply_branch_scope(Sale.query,Sale).filter(Sale.assigned_staff.isnot(None)).all() if s.assigned_staff})
- return render_template('sales.html',sales=items,q=q,date_filter=day,month=month,branch_id=branch_id,settlement_status=settlement_status,staff_name=staff_name,staff_choices=staff_choices,status_counts=status_counts,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all(),doc_counts=doc_counts,total_settlement=sum(s.settlement_amount_v2 or money(s.settlement) for s in items),total_margin=sum(s.final_margin or money(s.margin) for s in items))
+ return render_template('sales.html',sales=items,q=q,date_filter=day,month=month,branch_id=branch_id,settlement_status=settlement_status,settlement_age=settlement_age,staff_name=staff_name,staff_choices=staff_choices,status_counts=status_counts,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all(),doc_counts=doc_counts,total_settlement=sum(s.settlement_amount_v2 or money(s.settlement) for s in items),total_margin=sum(s.final_margin or money(s.margin) for s in items),today=date.today())
 
 @app.get('/sales/export.xlsx')
 @login_required
