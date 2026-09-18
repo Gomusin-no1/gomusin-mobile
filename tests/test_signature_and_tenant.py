@@ -198,6 +198,14 @@ class SignatureAndTenantTest(unittest.TestCase):
   content=' '.join(str(cell or '') for sheet in book.worksheets for row in sheet.iter_rows(values_only=True) for cell in row)
   self.assertIn('A직원',content);self.assertNotIn('B직원',content);self.assertEqual(['매장별 실적','직원별 실적'],book.sheetnames)
 
+ def test_sales_settlement_excel_keeps_filters_and_company_scope(self):
+  from openpyxl import load_workbook
+  with app.app_context():
+   db.session.add_all([Sale(customer_name='A 미지급엑셀',opening_date=date.today(),branch_id=self.a_branch,assigned_staff='A정산',settlement_amount_v2=110000,final_margin=22000,settlement_status='미지급'),Sale(customer_name='A 정상제외',opening_date=date.today(),branch_id=self.a_branch,assigned_staff='A정산',settlement_status='정상'),Sale(customer_name='B 엑셀비공개',opening_date=date.today(),branch_id=self.b_branch,assigned_staff='B정산',settlement_status='미지급')]);db.session.commit()
+  self.login_as_a();response=self.client.get(f'/sales/export.xlsx?month={date.today():%Y-%m}&settlement_status=미지급&staff=A정산')
+  self.assertEqual(200,response.status_code);book=load_workbook(io.BytesIO(response.data),read_only=True);content=' '.join(str(cell or '') for row in book.active.iter_rows(values_only=True) for cell in row)
+  self.assertIn('A 미지급엑셀',content);self.assertNotIn('A 정상제외',content);self.assertNotIn('B 엑셀비공개',content);self.assertIn('110000',content)
+
  def test_ob_management_uses_latest_sale_and_customer_type_filter(self):
   old=add_months(date.today(),-31);recent=add_months(date.today(),-2)
   with app.app_context():
