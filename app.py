@@ -97,7 +97,8 @@ class Customer(db.Model):
  marketing_consent=db.Column(db.Boolean,default=False,nullable=False,index=True); marketing_consent_at=db.Column(db.DateTime); marketing_opt_out_at=db.Column(db.DateTime,index=True)
  created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False); updated_at=db.Column(db.DateTime,default=datetime.utcnow,onupdate=datetime.utcnow,nullable=False)
 class Booking(db.Model):
- id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),nullable=False); phone=db.Column(db.String(30)); visit_date=db.Column(db.String(50)); device=db.Column(db.String(100)); memo=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
+ id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),nullable=False); phone=db.Column(db.String(30)); visit_date=db.Column(db.String(50),index=True); device=db.Column(db.String(100)); memo=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
+ company_code=db.Column(db.String(50),default='trustflow',nullable=False,index=True); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id'),index=True); status=db.Column(db.String(30),default='예약',nullable=False,index=True); assigned_staff=db.Column(db.String(50)); completed_at=db.Column(db.DateTime)
 class Price(db.Model):
  id=db.Column(db.Integer,primary_key=True); device=db.Column(db.String(100),nullable=False); carrier=db.Column(db.String(30),nullable=False); sale_type=db.Column(db.String(30),nullable=False); price=db.Column(db.String(100),nullable=False); rebate_amount=db.Column(db.Integer,default=0,nullable=False); company_code=db.Column(db.String(50),default='trustflow',nullable=False,index=True); updated_at=db.Column(db.DateTime,default=datetime.utcnow,onupdate=datetime.utcnow,nullable=False)
 class Partner(db.Model):
@@ -410,6 +411,7 @@ def tenant_read_filter(execute_state):
   with_loader_criteria(AccountRequest,lambda row:row.company_code==company,include_aliases=True),
   with_loader_criteria(AuditLog,lambda row:row.company_code==company,include_aliases=True),
   with_loader_criteria(Price,lambda row:row.company_code==company,include_aliases=True),
+  with_loader_criteria(Booking,lambda row:row.company_code==company,include_aliases=True),
   with_loader_criteria(SmsCampaign,lambda row:row.company_code==company,include_aliases=True),
   with_loader_criteria(BranchMonthlyTarget,lambda row:row.company_code==company,include_aliases=True)
  )
@@ -419,7 +421,7 @@ def tenant_write_defaults(db_session,flush_context,instances):
  if not has_request_context() or not session.get('user_id'):return
  company=current_company()
  for obj in db_session.new:
-  if isinstance(obj,(Branch,Customer,Price,SmsCampaign,BranchMonthlyTarget)) and not obj.company_code:obj.company_code=company
+  if isinstance(obj,(Branch,Customer,Price,Booking,SmsCampaign,BranchMonthlyTarget)) and not obj.company_code:obj.company_code=company
 
 def is_admin():
  return session.get('role')=='admin'
@@ -672,6 +674,7 @@ def seed_masters():
 
 def prepare_database():
  db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','customer_type':"VARCHAR(30) DEFAULT '기존손님'",'address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)','hobbies':'VARCHAR(500)','interests':'VARCHAR(500)','marketing_consent':'BOOLEAN DEFAULT FALSE','marketing_consent_at':'TIMESTAMP','marketing_opt_out_at':'TIMESTAMP'}); _add_columns('price',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'rebate_amount':'INTEGER DEFAULT 0'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale()
+ _add_columns('booking',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','status':"VARCHAR(30) DEFAULT '예약'",'assigned_staff':'VARCHAR(50)','completed_at':'TIMESTAMP'})
  _add_columns('sms_campaign_recipient',{'last_attempt_at':'TIMESTAMP','next_attempt_at':'TIMESTAMP','attempt_count':'INTEGER DEFAULT 0'})
  if db.engine.dialect.name=='postgresql':
   try:
@@ -1068,6 +1071,43 @@ def legal_case_notice(case_id):
  text_body=f'''내용증명\n\n수신인: {c.name}\n주소: {x.debtor_address or c.address_road or c.address_jibun or '[주소 확인 필요]'}\n발신인: {b.name if b else 'TrustFlow 등록 사업자'}\n\n제목: {x.case_type} 관련 금원 지급 요청\n\n1. 발생일: {x.incident_date or '[확인 필요]'}\n2. 청구금액: {x.claim_amount:,}원\n3. 청구사유: {x.reason or '[구체적 사실관계 입력 필요]'}\n4. 보유 증빙: {x.evidence or '[계약서·입금내역·대화내역 등 확인 필요]'}\n5. 지급기한: {x.demand_due_date or '[기한 입력 필요]'}\n\n위 기한까지 지급 또는 협의가 없을 경우 지급명령·소액사건심판 등 적법한 절차를 검토할 수 있음을 알려드립니다.\n\n작성일: {date.today()}\n발신인: ____________________\n\n※ 본 문서는 내부 업무용 초안입니다. 발송 전 사실관계·계약·개인정보·관할법원을 확인하고 필요한 경우 변호사 또는 법률구조기관의 검토를 받으세요.'''
  audit('법률서식 다운로드','legal_case',x.id,f'{c.name} · {x.case_type}',x.branch_id);db.session.commit();out=io.BytesIO(text_body.encode('utf-8-sig'));return send_file(out,as_attachment=True,download_name=f'{c.name}_내용증명_초안.txt',mimetype='text/plain; charset=utf-8')
 
+@app.route('/bookings',methods=['GET','POST'])
+@login_required
+def bookings():
+ prepare_database(); branch_id=scoped_branch_from_request()
+ if request.method=='POST':
+  bid=current_branch_id() if not is_admin() else request.form.get('branch_id')
+  name=request.form.get('name','').strip(); visit_date=request.form.get('visit_date','').strip()
+  if not bid or not name or not visit_date:
+   flash('담당 지점, 고객명, 방문일시를 입력해주세요.','error')
+  else:
+   enforce_branch(bid)
+   try:
+    parsed_visit=datetime.fromisoformat(visit_date)
+    if parsed_visit < datetime.now()-timedelta(days=1):raise ValueError
+   except (TypeError,ValueError):
+    flash('방문일시는 오늘 이후의 올바른 시간으로 입력해주세요.','error');return redirect(url_for('bookings',branch_id=bid))
+   booking=Booking(name=name,phone=normalize_phone(request.form.get('phone','')),visit_date=parsed_visit.strftime('%Y-%m-%dT%H:%M'),device=request.form.get('device','').strip(),memo=request.form.get('memo','').strip(),company_code=current_company(),branch_id=int(bid),status='예약',assigned_staff=request.form.get('assigned_staff','').strip() or session.get('display_name') or session.get('username'))
+   db.session.add(booking);db.session.flush();audit('방문예약 등록','booking',booking.id,f'{booking.name} · {booking.visit_date}',booking.branch_id);db.session.commit();flash('방문예약을 등록했습니다.','success')
+  return redirect(url_for('bookings',branch_id=bid or ''))
+ q=apply_branch_scope(Booking.query,Booking)
+ if branch_id:q=q.filter_by(branch_id=branch_id)
+ status=request.args.get('status','').strip()
+ if status:q=q.filter_by(status=status)
+ day=request.args.get('date','').strip()
+ if day:q=q.filter(Booking.visit_date.like(f'{day}%'))
+ rows=q.order_by(Booking.visit_date.asc(),Booking.id.desc()).limit(500).all()
+ return render_template('bookings.html',bookings=rows,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all(),branch_map={b.id:b for b in Branch.query.all()},branch_id=branch_id,status=status,selected_date=day,today=date.today().isoformat())
+
+@app.post('/bookings/<int:booking_id>/status')
+@login_required
+def booking_status(booking_id):
+ booking=Booking.query.get_or_404(booking_id);enforce_branch(booking.branch_id)
+ status=request.form.get('status','예약')
+ if status not in ['예약','방문완료','취소','노쇼']:abort(400)
+ booking.status=status;booking.completed_at=datetime.utcnow() if status in ['방문완료','취소','노쇼'] else None
+ audit('방문예약 상태변경','booking',booking.id,f'{booking.name} · {status}',booking.branch_id);db.session.commit();flash('예약 상태를 변경했습니다.','success');return redirect(request.referrer or url_for('bookings'))
+
 @app.route('/')
 @login_required
 def dashboard():
@@ -1085,10 +1125,13 @@ def dashboard():
  pq=payback_query_scoped()
  pending_paybacks=pq.filter(Payback.status!='완료').count()
  today_paybacks=payback_query_scoped().filter(Payback.due_date==today,Payback.status!='완료').all()
+ booking_q=apply_branch_scope(Booking.query,Booking)
+ selected_bookings=booking_q.filter(Booking.visit_date.like(f'{selected.isoformat()}%'),Booking.status=='예약').order_by(Booking.visit_date.asc()).all()
+ today_bookings=selected_bookings if selected==today else booking_q.filter(Booking.visit_date.like(f'{today.isoformat()}%'),Booking.status=='예약').order_by(Booking.visit_date.asc()).all()
  branches={b.id:b for b in Branch.query.all()}
  sales_map={s.id:s for s in Sale.query.filter(Sale.id.in_([p.sale_id for p in today_paybacks] or [0])).all()}
  cal=calendar.Calendar(firstweekday=6); weeks=cal.monthdayscalendar(today.year,today.month)
- return render_template('dashboard.html',today=today,selected=selected,tasks=tasks,overdue=overdue,overdue_settlements=overdue_settlements,counts=counts,weeks=weeks,year=today.year,month=today.month,today_sales=len(today_sale_items),today_sale_items=today_sale_items,pending_paybacks=pending_paybacks,today_paybacks=today_paybacks,sales_map=sales_map,branches=branches,task_due_stage=task_due_stage)
+ return render_template('dashboard.html',today=today,selected=selected,tasks=tasks,overdue=overdue,overdue_settlements=overdue_settlements,counts=counts,weeks=weeks,year=today.year,month=today.month,today_sales=len(today_sale_items),today_sale_items=today_sale_items,pending_paybacks=pending_paybacks,today_paybacks=today_paybacks,sales_map=sales_map,branches=branches,task_due_stage=task_due_stage,selected_bookings=selected_bookings,today_bookings=today_bookings)
 
 @app.get('/notifications')
 @login_required
