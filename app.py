@@ -1699,10 +1699,8 @@ def sale_edit(sid):
  addons=SaleAddon.query.filter_by(sale_id=sale.id).order_by(SaleAddon.id).all(); pb=Payback.query.filter_by(sale_id=sale.id).first()
  return render_template('sale_edit.html',sale=sale,addons=addons,payback=pb,staff=staff,partners=partners,branches=branches,plans=plans,plan_data=plan_data)
 
-@app.route('/sales')
-@login_required
-def sales():
- q=request.args.get('q','').strip(); day=request.args.get('date','').strip(); month=request.args.get('month','').strip(); branch_id=request.args.get('branch_id','').strip();settlement_status=request.args.get('settlement_status','').strip();staff_name=request.args.get('staff','').strip()
+def filtered_sales(args):
+ q=args.get('q','').strip();day=args.get('date','').strip();month=args.get('month','').strip();branch_id=args.get('branch_id','').strip();settlement_status=args.get('settlement_status','').strip();staff_name=args.get('staff','').strip()
  query=apply_branch_scope(Sale.query,Sale)
  if not is_admin():
   branch_id=str(current_branch_id() or ''); query=query.filter(Sale.branch_id==current_branch_id()) if current_branch_id() else query.filter(Sale.id==-1)
@@ -1718,10 +1716,28 @@ def sales():
  if settlement_status:query=query.filter(Sale.settlement_status==settlement_status)
  if staff_name:query=query.filter(Sale.assigned_staff==staff_name)
  if q:query=query.filter(or_(Sale.customer_name.ilike(f'%{q}%'),Sale.customer_phone.ilike(f'%{q}%'),Sale.device.ilike(f'%{q}%'),Sale.serial_number.ilike(f'%{q}%')))
- items=query.order_by(Sale.opening_date.desc(),Sale.id.desc()).all()
+ return query.order_by(Sale.opening_date.desc(),Sale.id.desc()).all(),{'q':q,'day':day,'month':month,'branch_id':branch_id,'settlement_status':settlement_status,'staff_name':staff_name}
+
+@app.route('/sales')
+@login_required
+def sales():
+ items,filters=filtered_sales(request.args);q=filters['q'];day=filters['day'];month=filters['month'];branch_id=filters['branch_id'];settlement_status=filters['settlement_status'];staff_name=filters['staff_name']
  doc_counts=dict(db.session.query(SaleDocument.sale_id,db.func.count(SaleDocument.id)).filter(SaleDocument.sale_id.in_([s.id for s in items] or [0])).group_by(SaleDocument.sale_id).all())
  status_counts={status:sum(1 for s in items if (s.settlement_status or '미지급')==status) for status in ['정상','추가금','미지급']};staff_choices=sorted({s.assigned_staff for s in apply_branch_scope(Sale.query,Sale).filter(Sale.assigned_staff.isnot(None)).all() if s.assigned_staff})
  return render_template('sales.html',sales=items,q=q,date_filter=day,month=month,branch_id=branch_id,settlement_status=settlement_status,staff_name=staff_name,staff_choices=staff_choices,status_counts=status_counts,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all(),doc_counts=doc_counts,total_settlement=sum(s.settlement_amount_v2 or money(s.settlement) for s in items),total_margin=sum(s.final_margin or money(s.margin) for s in items))
+
+@app.get('/sales/export.xlsx')
+@login_required
+def sales_export():
+ from openpyxl import Workbook
+ from openpyxl.styles import Font,PatternFill,Alignment
+ items,filters=filtered_sales(request.args);branches={b.id:b.name for b in Branch.query.all()};wb=Workbook();ws=wb.active;ws.title='판매 정산';headers=['개통일','지점','고객명','전화번호','통신사','개통유형','기종','일련번호','판매자','정산금액','최종마진','정산상태','확인자','확인일시'];ws.append(headers)
+ for cell in ws[1]:cell.font=Font(bold=True,color='FFFFFF');cell.fill=PatternFill('solid',fgColor='14324A');cell.alignment=Alignment(horizontal='center')
+ for s in items:ws.append([s.opening_date,branches.get(s.branch_id,'-'),s.customer_name,s.customer_phone or '',s.carrier or '',s.opening_type or '',s.device or '',s.serial_number or '',s.assigned_staff or s.created_by or '',s.settlement_amount_v2 or money(s.settlement),s.final_margin or money(s.margin),s.settlement_status or '미지급',s.settlement_checked_by or '',s.settlement_checked_at])
+ ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
+ for col in ws.columns:ws.column_dimensions[col[0].column_letter].width=min(28,max(12,max(len(str(c.value or '')) for c in col)+2))
+ audit('판매 정산 엑셀 다운로드','sale',filters['month'] or filters['day'] or '전체',f'{len(items)}건',int(filters['branch_id']) if filters['branch_id'].isdigit() else None);db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
+ return send_file(out,as_attachment=True,download_name=f'TrustFlow_판매정산_{filters["month"] or filters["day"] or date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 @app.post('/sales/<int:sid>/settlement-status')
 @login_required
