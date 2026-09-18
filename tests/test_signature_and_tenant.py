@@ -315,11 +315,11 @@ class SignatureAndTenantTest(unittest.TestCase):
  def test_admin_backup_excludes_other_company_records(self):
   from openpyxl import load_workbook
   with app.app_context():
-   db.session.add_all([Sale(customer_name='A 백업고객',opening_date=date.today(),branch_id=self.a_branch),Sale(customer_name='B 백업비공개',opening_date=date.today(),branch_id=self.b_branch),Inventory(serial_number='A-BACKUP',model='A모델',branch_id=self.a_branch),Inventory(serial_number='B-BACKUP',model='B모델',branch_id=self.b_branch)]);db.session.commit()
+   db.session.add_all([Sale(customer_name='A 백업고객',opening_date=date.today(),branch_id=self.a_branch),Sale(customer_name='B 백업비공개',opening_date=date.today(),branch_id=self.b_branch),Inventory(serial_number='A-BACKUP',model='A모델',branch_id=self.a_branch),Inventory(serial_number='B-BACKUP',model='B모델',branch_id=self.b_branch),Booking(name='A 예약백업',visit_date=f'{date.today()}T10:00',company_code='company-a',branch_id=self.a_branch),Booking(name='B 예약비공개',visit_date=f'{date.today()}T11:00',company_code='company-b',branch_id=self.b_branch)]);db.session.commit()
   self.login_as_a();response=self.client.get('/admin/backup.xlsx')
   self.assertEqual(200,response.status_code);book=load_workbook(io.BytesIO(response.data),read_only=True)
-  sales=' '.join(str(cell or '') for row in book['판매일보'].iter_rows(values_only=True) for cell in row);stock=' '.join(str(cell or '') for row in book['재고'].iter_rows(values_only=True) for cell in row)
-  self.assertIn('A 백업고객',sales);self.assertNotIn('B 백업비공개',sales);self.assertIn('A-BACKUP',stock);self.assertNotIn('B-BACKUP',stock)
+  sales=' '.join(str(cell or '') for row in book['판매일보'].iter_rows(values_only=True) for cell in row);stock=' '.join(str(cell or '') for row in book['재고'].iter_rows(values_only=True) for cell in row);bookings=' '.join(str(cell or '') for row in book['방문예약'].iter_rows(values_only=True) for cell in row)
+  self.assertEqual(11,len(book.sheetnames));self.assertIn('A 백업고객',sales);self.assertNotIn('B 백업비공개',sales);self.assertIn('A-BACKUP',stock);self.assertNotIn('B-BACKUP',stock);self.assertIn('A 예약백업',bookings);self.assertNotIn('B 예약비공개',bookings)
 
  def test_direct_cross_company_customer_access_is_blocked(self):
   self.login_as_a();response=self.client.get(f'/customers/{self.b_customer}')
