@@ -1111,9 +1111,12 @@ def notifications():
 @login_required
 def task_status(task_id):
  t=CustomerTask.query.get_or_404(task_id);
+ customer=Customer.query.get(t.customer_id) if t.customer_id else None
+ if customer and not customer_allowed(customer):abort(403)
+ sale=None
  if t.sale_id:
-  enforce_branch(Sale.query.get_or_404(t.sale_id).branch_id)
- status=request.form.get('status','처리예정'); old_due=t.due_date; t.status=status; t.result_memo=request.form.get('memo','').strip() or t.result_memo
+  sale=Sale.query.get_or_404(t.sale_id);enforce_branch(sale.branch_id)
+ status=request.form.get('status','처리예정'); old_status=t.status; old_due=t.due_date; t.status=status; t.result_memo=request.form.get('memo','').strip() or t.result_memo
  if status=='완료':
   t.completed_at=datetime.utcnow(); t.completed_by=session.get('display_name') or session.get('username')
  else:
@@ -1124,12 +1127,18 @@ def task_status(task_id):
    history=f'[연기 {datetime.now().strftime("%Y-%m-%d %H:%M")}] {old_due} → {new_due} / {session.get("display_name") or session.get("username")}'
    t.result_memo=(t.result_memo+'\\n' if t.result_memo else '')+history
   t.due_date=new_due
- db.session.commit();flash('고객약속 상태가 변경되었습니다.','success');return redirect(request.referrer or url_for('dashboard'))
+ if status=='연락안됨' and old_status!='연락안됨' and customer:
+  bid=(sale.branch_id if sale else customer.branch_id)
+  if bid:db.session.add(ContactLog(customer_id=customer.id,branch_id=bid,staff_name=session.get('display_name') or session.get('username'),channel='전화',outcome='연락안됨',note=f'{t.title} · 전화 연결 실패. 카카오채널 후속 상담 필요.',next_contact_date=None))
+ db.session.commit();flash('연락 실패 이력을 저장했습니다. 고객이력에서 카카오채널 상담을 이어가세요.' if status=='연락안됨' else '고객약속 상태가 변경되었습니다.','success');return redirect(request.referrer or url_for('dashboard'))
 
 @app.route('/tasks/<int:task_id>/edit',methods=['GET','POST'])
 @login_required
 def task_edit(task_id):
  t=CustomerTask.query.get_or_404(task_id)
+ if t.customer_id:
+  customer=Customer.query.get(t.customer_id)
+  if customer and not customer_allowed(customer):abort(403)
  if t.sale_id: enforce_branch(Sale.query.get_or_404(t.sale_id).branch_id)
  if request.method=='POST':
   old_due=t.due_date; t.task_type=request.form.get('task_type','기타'); t.title=request.form.get('title','').strip() or t.title
