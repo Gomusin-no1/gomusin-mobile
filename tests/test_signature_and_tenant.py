@@ -13,7 +13,7 @@ os.environ['ADMIN_USERNAME']=''
 os.environ['ADMIN_PASSWORD']=''
 
 from werkzeug.security import generate_password_hash, check_password_hash
-from app import app, db, User, Branch, BranchMonthlyTarget, Customer, CustomerTask, Inventory, InventoryMovement, DeviceMaster, Sale, SaleAddon, WiredSale, CashLedger, AccountRequest, AuditLog, Price, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months, addon_rule_for_carrier, resolved_addon_rule, task_due_stage
+from app import app, db, User, Branch, BranchMonthlyTarget, Customer, CustomerTask, ContactLog, Inventory, InventoryMovement, DeviceMaster, Sale, SaleAddon, WiredSale, CashLedger, AccountRequest, AuditLog, Price, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months, addon_rule_for_carrier, resolved_addon_rule, task_due_stage
 
 
 class SignatureAndTenantTest(unittest.TestCase):
@@ -132,6 +132,14 @@ class SignatureAndTenantTest(unittest.TestCase):
    db.session.add_all([CustomerTask(sale_id=own_sale.id,task_type='고객약속',title='A 공개업무',due_date=date.today()-timedelta(days=1),assigned_staff='A관리자',status='처리예정'),CustomerTask(sale_id=foreign_sale.id,task_type='고객약속',title='B 비공개업무',due_date=date.today()-timedelta(days=1),assigned_staff='B관리자',status='처리예정')]);db.session.commit()
   self.login_as_a();response=self.client.get(f'/reports/sales-performance?month={date.today():%Y-%m}');body=response.get_data(as_text=True)
   self.assertEqual(200,response.status_code);self.assertIn('미처리',body);self.assertIn('기한초과',body);self.assertIn('A관리자',body);self.assertNotIn('B관리자',body)
+
+ def test_contact_failure_creates_customer_history_once(self):
+  with app.app_context():
+   customer=Customer.query.filter_by(company_code='company-a').first();customer_id=customer.id;task=CustomerTask(customer_id=customer_id,task_type='OB 재연락',title='고객 재통화',due_date=date.today(),status='처리예정');db.session.add(task);db.session.commit();task_id=task.id
+  self.login_as_a();response=self.client.post(f'/tasks/{task_id}/status',data={'status':'연락안됨'},follow_redirects=False);self.assertEqual(302,response.status_code)
+  self.client.post(f'/tasks/{task_id}/status',data={'status':'연락안됨'},follow_redirects=False)
+  with app.app_context():
+   logs=ContactLog.query.filter_by(customer_id=customer_id,outcome='연락안됨').all();self.assertEqual(1,len(logs));self.assertIn('카카오채널',logs[0].note)
 
  def test_deactivated_user_session_is_revoked_on_next_request(self):
   self.login_as_a()
