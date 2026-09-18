@@ -87,6 +87,9 @@ class Branch(db.Model):
  id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),unique=True,nullable=False,index=True)
  code=db.Column(db.String(30),unique=True); address=db.Column(db.String(255)); phone=db.Column(db.String(30)); manager_name=db.Column(db.String(50))
  company_code=db.Column(db.String(50),default='trustflow',nullable=False,index=True); active=db.Column(db.Boolean,default=True,nullable=False); memo=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
+class BranchMonthlyTarget(db.Model):
+ id=db.Column(db.Integer,primary_key=True);company_code=db.Column(db.String(50),default='trustflow',nullable=False,index=True);branch_id=db.Column(db.Integer,db.ForeignKey('branch.id'),nullable=False,index=True);month=db.Column(db.String(7),nullable=False,index=True);mobile_goal=db.Column(db.Integer,default=0,nullable=False);wired_goal=db.Column(db.Integer,default=0,nullable=False);margin_goal=db.Column(db.Integer,default=0,nullable=False);updated_by=db.Column(db.String(50));updated_at=db.Column(db.DateTime,default=datetime.utcnow,onupdate=datetime.utcnow,nullable=False)
+ __table_args__=(db.UniqueConstraint('company_code','branch_id','month',name='uq_branch_monthly_target'),)
 class Customer(db.Model):
  id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),nullable=False); phone=db.Column(db.String(30),index=True); device=db.Column(db.String(100)); carrier=db.Column(db.String(30)); status=db.Column(db.String(30),default='상담중',nullable=False); memo=db.Column(db.Text)
  company_code=db.Column(db.String(50),default='trustflow',nullable=False,index=True); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id'),index=True); customer_type=db.Column(db.String(30),default='기존손님',nullable=False,index=True)
@@ -389,7 +392,8 @@ def tenant_read_filter(execute_state):
   with_loader_criteria(AccountRequest,lambda row:row.company_code==company,include_aliases=True),
   with_loader_criteria(AuditLog,lambda row:row.company_code==company,include_aliases=True),
   with_loader_criteria(Price,lambda row:row.company_code==company,include_aliases=True),
-  with_loader_criteria(SmsCampaign,lambda row:row.company_code==company,include_aliases=True)
+  with_loader_criteria(SmsCampaign,lambda row:row.company_code==company,include_aliases=True),
+  with_loader_criteria(BranchMonthlyTarget,lambda row:row.company_code==company,include_aliases=True)
  )
 
 @event.listens_for(OrmSession,'before_flush')
@@ -397,7 +401,7 @@ def tenant_write_defaults(db_session,flush_context,instances):
  if not has_request_context() or not session.get('user_id'):return
  company=current_company()
  for obj in db_session.new:
-  if isinstance(obj,(Branch,Customer,Price,SmsCampaign)) and not obj.company_code:obj.company_code=company
+  if isinstance(obj,(Branch,Customer,Price,SmsCampaign,BranchMonthlyTarget)) and not obj.company_code:obj.company_code=company
 
 def is_admin():
  return session.get('role')=='admin'
@@ -788,9 +792,13 @@ def sales_performance_data(month,branch_id=None):
  wired_q=apply_branch_scope(WiredSale.query,WiredSale).filter(WiredSale.sale_date>=start,WiredSale.sale_date<end)
  if branch_id:
   mobile_q=mobile_q.filter(Sale.branch_id==branch_id);wired_q=wired_q.filter(WiredSale.branch_id==branch_id)
- mobile=mobile_q.all();wired=wired_q.all();branch_names={b.id:b.name for b in Branch.query.order_by(Branch.id).all()}
- def blank(label):return {'label':label,'mobile_count':0,'wired_count':0,'settlement':0,'margin':0,'open_tasks':0,'overdue_tasks':0}
+ mobile=mobile_q.all();wired=wired_q.all();branch_names={b.id:b.name for b in Branch.query.order_by(Branch.id).all()};target_q=BranchMonthlyTarget.query.filter_by(month=month)
+ if branch_id:target_q=target_q.filter_by(branch_id=branch_id)
+ targets={x.branch_id:x for x in target_q.all()}
+ def blank(label):return {'label':label,'mobile_count':0,'wired_count':0,'settlement':0,'margin':0,'open_tasks':0,'overdue_tasks':0,'mobile_goal':0,'wired_goal':0,'margin_goal':0}
  branch_rows={};staff_rows={}
+ for bid,target in targets.items():
+  row=branch_rows.setdefault(bid,blank(branch_names.get(bid,'미지정 지점')));row.update(mobile_goal=target.mobile_goal or 0,wired_goal=target.wired_goal or 0,margin_goal=target.margin_goal or 0)
  combined=[(x,'mobile',x.settlement_amount_v2 or money(x.settlement)) for x in mobile]+[(x,'wired',x.settlement_amount or 0) for x in wired]
  for item,kind,settlement in combined:
   branch=branch_rows.setdefault(item.branch_id,blank(branch_names.get(item.branch_id,'미지정 지점')))
@@ -805,9 +813,10 @@ def sales_performance_data(month,branch_id=None):
   if task.due_date<date.today():row['overdue_tasks']+=1
  rows_branch=sorted(branch_rows.values(),key=lambda x:(x['margin'],x['mobile_count']+x['wired_count']),reverse=True)
  rows_staff=sorted(staff_rows.values(),key=lambda x:(x['margin'],x['mobile_count']+x['wired_count']),reverse=True)
- max_count=max([x['mobile_count']+x['wired_count'] for x in rows_branch+rows_staff] or [1]);max_margin=max([max(0,x['margin']) for x in rows_branch+rows_staff] or [1]) or 1
+ max_count=max([x['mobile_count']+x['wired_count'] for x in rows_branch+rows_staff] or [1]) or 1;max_margin=max([max(0,x['margin']) for x in rows_branch+rows_staff] or [1]) or 1
  for row in rows_branch+rows_staff:
   row['total_count']=row['mobile_count']+row['wired_count'];row['count_pct']=round(row['total_count']/max_count*100);row['margin_pct']=round(max(0,row['margin'])/max_margin*100)
+  row['total_goal']=row['mobile_goal']+row['wired_goal'];row['goal_count_pct']=round(row['total_count']/row['total_goal']*100) if row['total_goal'] else None;row['goal_margin_pct']=round(row['margin']/row['margin_goal']*100) if row['margin_goal'] else None
  totals={'mobile_count':len(mobile),'wired_count':len(wired),'settlement':sum(x.settlement_amount_v2 or money(x.settlement) for x in mobile)+sum(x.settlement_amount or 0 for x in wired),'margin':sum(x.final_margin or 0 for x in mobile)+sum(x.final_margin or 0 for x in wired)}
  return month,rows_branch,rows_staff,totals
 
@@ -816,7 +825,23 @@ def sales_performance_data(month,branch_id=None):
 def sales_performance():
  prepare_database();month=request.args.get('month') or date.today().strftime('%Y-%m');branch_id=scoped_branch_from_request()
  month,branch_rows,staff_rows,totals=sales_performance_data(month,branch_id)
- return render_template('sales_performance.html',month=month,branch_id=branch_id,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all(),branch_rows=branch_rows,staff_rows=staff_rows,totals=totals)
+ target_map={x.branch_id:x for x in BranchMonthlyTarget.query.filter_by(month=month).all()}
+ return render_template('sales_performance.html',month=month,branch_id=branch_id,branches=Branch.query.filter_by(active=True).order_by(Branch.id).all(),branch_rows=branch_rows,staff_rows=staff_rows,totals=totals,target_map=target_map)
+
+@app.post('/reports/sales-performance/targets')
+@login_required
+@admin_required
+def sales_performance_targets():
+ month=request.form.get('month','').strip()
+ try:datetime.strptime(month,'%Y-%m')
+ except:abort(400)
+ saved=0
+ for branch in Branch.query.filter_by(active=True).all():
+  if str(branch.id) not in request.form.getlist('branch_id'):continue
+  target=BranchMonthlyTarget.query.filter_by(branch_id=branch.id,month=month).first()
+  if not target:target=BranchMonthlyTarget(company_code=current_company(),branch_id=branch.id,month=month);db.session.add(target)
+  target.mobile_goal=max(0,money(request.form.get(f'mobile_goal_{branch.id}')));target.wired_goal=max(0,money(request.form.get(f'wired_goal_{branch.id}')));target.margin_goal=max(0,money(request.form.get(f'margin_goal_{branch.id}')));target.updated_by=session.get('display_name') or session.get('username');saved+=1
+ audit('월 실적목표 저장','performance_target',month,f'{saved}개 지점');db.session.commit();flash(f'{month} 실적목표를 저장했습니다.','success');return redirect(url_for('sales_performance',month=month))
 
 @app.get('/reports/sales-performance.xlsx')
 @login_required
@@ -831,7 +856,7 @@ def sales_performance_export():
   for row in rows:ws.append(row)
   ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
   for col in ws.columns:ws.column_dimensions[col[0].column_letter].width=min(30,max(13,max(len(str(c.value or '')) for c in col)+2))
- add_sheet('매장별 실적',['매장','모바일 건수','유선 건수','총 건수','정산매출','최종마진'],[(x['label'],x['mobile_count'],x['wired_count'],x['total_count'],x['settlement'],x['margin']) for x in branch_rows])
+ add_sheet('매장별 실적',['매장','모바일 건수','모바일 목표','유선 건수','유선 목표','총 건수','건수 달성률','정산매출','최종마진','마진 목표','마진 달성률'],[(x['label'],x['mobile_count'],x['mobile_goal'],x['wired_count'],x['wired_goal'],x['total_count'],x['goal_count_pct'],x['settlement'],x['margin'],x['margin_goal'],x['goal_margin_pct']) for x in branch_rows])
  add_sheet('직원별 실적',['매장','직원','모바일 건수','유선 건수','총 건수','정산매출','최종마진','미처리 업무','기한초과'],[(x['branch'],x['label'],x['mobile_count'],x['wired_count'],x['total_count'],x['settlement'],x['margin'],x['open_tasks'],x['overdue_tasks']) for x in staff_rows])
  audit('월별 실적보고서 다운로드','report',month,f'지점 {branch_id or "전체"} · {totals["mobile_count"]+totals["wired_count"]}건');db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
  return send_file(out,as_attachment=True,download_name=f'TrustFlow_{month}_월별실적.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
