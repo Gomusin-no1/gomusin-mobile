@@ -11,7 +11,7 @@ os.environ['ADMIN_USERNAME']=''
 os.environ['ADMIN_PASSWORD']=''
 
 from werkzeug.security import generate_password_hash, check_password_hash
-from app import app, db, User, Branch, Customer, CustomerTask, Inventory, InventoryMovement, Sale, WiredSale, CashLedger, AccountRequest, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months
+from app import app, db, User, Branch, Customer, CustomerTask, Inventory, InventoryMovement, Sale, WiredSale, CashLedger, AccountRequest, AuditLog, Price, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months
 
 
 class SignatureAndTenantTest(unittest.TestCase):
@@ -64,6 +64,37 @@ class SignatureAndTenantTest(unittest.TestCase):
   response=self.client.get('/customers/export.xlsx?customer_type=성지손님');self.assertEqual(200,response.status_code)
   book=load_workbook(io.BytesIO(response.data),read_only=True);content=' '.join(str(cell or '') for row in book.active.iter_rows(values_only=True) for cell in row)
   self.assertIn('A 고객',content);self.assertIn('낚시',content);self.assertIn('인터넷 결합',content);self.assertNotIn('B 고객',content)
+
+ def test_admin_notification_reports_only_own_company_downloads(self):
+  with app.app_context():
+   db.session.add_all([AuditLog(company_code='company-a',username='A직원',action='고객목록 다운로드',detail='성지손님 10명',ip_address='10.0.0.1'),AuditLog(company_code='company-b',username='B직원',action='고객목록 다운로드',detail='비공개 20명',ip_address='10.0.0.2')]);db.session.commit()
+  self.login_as_a();response=self.client.get('/notifications');body=response.get_data(as_text=True)
+  self.assertEqual(200,response.status_code);self.assertIn('A직원',body);self.assertIn('10.0.0.1',body);self.assertNotIn('B직원',body);self.assertNotIn('10.0.0.2',body)
+
+ def test_price_excel_import_upserts_and_is_company_isolated(self):
+  from openpyxl import Workbook
+  with app.app_context():
+   db.session.add_all([Price(device='갤럭시 A',carrier='SKT',sale_type='번호이동',price='구단가',company_code='company-a'),Price(device='타회사폰',carrier='KT',sale_type='기기변경',price='비공개',company_code='company-b')]);db.session.commit()
+  book=Workbook();sheet=book.active;sheet.append(['모델명','통신사','가입유형','단가']);sheet.append(['갤럭시 A','SKT','번호이동','100,000원']);sheet.append(['아이폰 B','KT','기기변경','200,000원']);data=io.BytesIO();book.save(data);data.seek(0)
+  self.login_as_a();response=self.client.post('/prices/import',data={'file':(data,'partner.xlsx')},content_type='multipart/form-data',follow_redirects=True);body=response.get_data(as_text=True)
+  self.assertEqual(200,response.status_code);self.assertIn('신규 1건, 수정 1건'.encode(),response.data);self.assertIn('아이폰 B',body);self.assertNotIn('타회사폰',body)
+  with app.app_context():
+   self.assertEqual('100,000원',Price.query.execution_options(skip_tenant=True).filter_by(company_code='company-a',device='갤럭시 A').one().price)
+   self.assertEqual(2,Price.query.execution_options(skip_tenant=True).filter_by(company_code='company-a').count())
+
+ def test_price_management_rejects_staff(self):
+  self.login_as_a()
+  with self.client.session_transaction() as sess:sess['role']='staff'
+  with app.app_context():
+   user=db.session.get(User,self.a_user);user.role='staff';db.session.commit()
+  self.assertEqual(403,self.client.get('/prices').status_code)
+
+ def test_performance_report_includes_staff_workload_and_blocks_foreign_tasks(self):
+  with app.app_context():
+   own_sale=Sale(customer_name='A 업무고객',opening_date=date.today(),branch_id=self.a_branch,assigned_staff='A관리자');foreign_sale=Sale(customer_name='B 업무고객',opening_date=date.today(),branch_id=self.b_branch,assigned_staff='B관리자');db.session.add_all([own_sale,foreign_sale]);db.session.flush()
+   db.session.add_all([CustomerTask(sale_id=own_sale.id,task_type='고객약속',title='A 공개업무',due_date=date.today()-timedelta(days=1),assigned_staff='A관리자',status='처리예정'),CustomerTask(sale_id=foreign_sale.id,task_type='고객약속',title='B 비공개업무',due_date=date.today()-timedelta(days=1),assigned_staff='B관리자',status='처리예정')]);db.session.commit()
+  self.login_as_a();response=self.client.get(f'/reports/sales-performance?month={date.today():%Y-%m}');body=response.get_data(as_text=True)
+  self.assertEqual(200,response.status_code);self.assertIn('미처리',body);self.assertIn('기한초과',body);self.assertIn('A관리자',body);self.assertNotIn('B관리자',body)
 
  def test_deactivated_user_session_is_revoked_on_next_request(self):
   self.login_as_a()
