@@ -11,7 +11,7 @@ os.environ['ADMIN_USERNAME']=''
 os.environ['ADMIN_PASSWORD']=''
 
 from werkzeug.security import generate_password_hash, check_password_hash
-from app import app, db, User, Branch, BranchMonthlyTarget, Customer, CustomerTask, Inventory, InventoryMovement, DeviceMaster, Sale, SaleAddon, WiredSale, CashLedger, AccountRequest, AuditLog, Price, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months, addon_rule_for_carrier, resolved_addon_rule
+from app import app, db, User, Branch, BranchMonthlyTarget, Customer, CustomerTask, Inventory, InventoryMovement, DeviceMaster, Sale, SaleAddon, WiredSale, CashLedger, AccountRequest, AuditLog, Price, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months, addon_rule_for_carrier, resolved_addon_rule, task_due_stage
 
 
 class SignatureAndTenantTest(unittest.TestCase):
@@ -53,6 +53,14 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.assertEqual('D+95',addon_rule_for_carrier('LG U+'))
   self.assertEqual('M+3',addon_rule_for_carrier('KT'))
   self.assertEqual('D+30',resolved_addon_rule('D+30','LG'))
+
+ def test_task_due_stage_uses_operating_color_ladder(self):
+  today=date(2026,9,18)
+  self.assertEqual(('due-today','D-Day'),task_due_stage(today,today))
+  self.assertEqual(('due-1','D+1'),task_due_stage(today-timedelta(days=1),today))
+  self.assertEqual(('due-2','D+2'),task_due_stage(today-timedelta(days=2),today))
+  self.assertEqual(('due-3','D+3'),task_due_stage(today-timedelta(days=3),today))
+  self.assertEqual(('due-4','D+4'),task_due_stage(today-timedelta(days=4),today))
 
  def test_sale_auto_addon_rule_is_saved_as_resolved_rule(self):
   self.login_as_a();opening=date(2026,1,31)
