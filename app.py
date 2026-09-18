@@ -96,7 +96,7 @@ class Customer(db.Model):
 class Booking(db.Model):
  id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),nullable=False); phone=db.Column(db.String(30)); visit_date=db.Column(db.String(50)); device=db.Column(db.String(100)); memo=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
 class Price(db.Model):
- id=db.Column(db.Integer,primary_key=True); device=db.Column(db.String(100),nullable=False); carrier=db.Column(db.String(30),nullable=False); sale_type=db.Column(db.String(30),nullable=False); price=db.Column(db.String(100),nullable=False); company_code=db.Column(db.String(50),default='trustflow',nullable=False,index=True); updated_at=db.Column(db.DateTime,default=datetime.utcnow,onupdate=datetime.utcnow,nullable=False)
+ id=db.Column(db.Integer,primary_key=True); device=db.Column(db.String(100),nullable=False); carrier=db.Column(db.String(30),nullable=False); sale_type=db.Column(db.String(30),nullable=False); price=db.Column(db.String(100),nullable=False); rebate_amount=db.Column(db.Integer,default=0,nullable=False); company_code=db.Column(db.String(50),default='trustflow',nullable=False,index=True); updated_at=db.Column(db.DateTime,default=datetime.utcnow,onupdate=datetime.utcnow,nullable=False)
 class Partner(db.Model):
  id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),unique=True,nullable=False,index=True); category=db.Column(db.String(30)); contact_name=db.Column(db.String(50)); phone=db.Column(db.String(30)); settlement_cycle=db.Column(db.String(30)); default_tax_rate=db.Column(db.Float,default=0.133); active=db.Column(db.Boolean,default=True,nullable=False); memo=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
 class Inventory(db.Model):
@@ -643,7 +643,7 @@ def seed_masters():
  db.session.commit()
 
 def prepare_database():
- db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','customer_type':"VARCHAR(30) DEFAULT '기존손님'",'address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)','hobbies':'VARCHAR(500)','interests':'VARCHAR(500)','marketing_consent':'BOOLEAN DEFAULT FALSE','marketing_consent_at':'TIMESTAMP','marketing_opt_out_at':'TIMESTAMP'}); _add_columns('price',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale()
+ db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','customer_type':"VARCHAR(30) DEFAULT '기존손님'",'address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)','hobbies':'VARCHAR(500)','interests':'VARCHAR(500)','marketing_consent':'BOOLEAN DEFAULT FALSE','marketing_consent_at':'TIMESTAMP','marketing_opt_out_at':'TIMESTAMP'}); _add_columns('price',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'rebate_amount':'INTEGER DEFAULT 0'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale()
  _add_columns('sms_campaign_recipient',{'last_attempt_at':'TIMESTAMP','next_attempt_at':'TIMESTAMP','attempt_count':'INTEGER DEFAULT 0'})
  if db.engine.dialect.name=='postgresql':
   try:
@@ -1627,7 +1627,8 @@ def sale_new():
    db.session.add(Payback(sale_id=sale.id,customer_id=customer.id,amount=payback,due_date=payback_due,status='처리예정',bank=request.form.get('bank'),account_number=request.form.get('account_number'),account_holder=request.form.get('account_holder'),memo=request.form.get('payback_memo')))
    if payback_due:db.session.add(CustomerTask(customer_id=customer.id,sale_id=sale.id,task_type='페이백 지급',title=f'{name} 페이백 지급',description=f'{payback:,}원',due_date=payback_due,assigned_staff=sale.assigned_staff,auto_created=True))
   db.session.commit();flash('개통 등록이 완료되었습니다. 재고·판매일보·고객약속·페이백이 자동 반영되었습니다.','success');return redirect(url_for('sales'))
- return render_template('sale_form.html',staff=staff,partners=partners,branches=branches,today=date.today().isoformat(),sale=None,plans=plans,plan_data=plan_data)
+ price_data=[{'id':p.id,'device':p.device,'carrier':p.carrier,'sale_type':p.sale_type,'price':p.price,'rebate_amount':p.rebate_amount or money(p.price)} for p in Price.query.order_by(Price.device,Price.carrier,Price.sale_type).all()]
+ return render_template('sale_form.html',staff=staff,partners=partners,branches=branches,today=date.today().isoformat(),sale=None,plans=plans,plan_data=plan_data,price_data=price_data)
 
 
 def _customer_for_sale(sale):
@@ -1990,8 +1991,8 @@ def prices():
   if not all((device,carrier,sale_type,price)):flash('기종, 통신사, 가입유형, 가격을 모두 입력해주세요.','error')
   else:
    item=Price.query.filter_by(device=device,carrier=carrier,sale_type=sale_type).first()
-   if item:item.price=price;item.updated_at=datetime.utcnow();message='기존 단가를 수정했습니다.'
-   else:db.session.add(Price(device=device,carrier=carrier,sale_type=sale_type,price=price,company_code=current_company()));message='단가를 등록했습니다.'
+   if item:item.price=price;item.rebate_amount=money(price);item.updated_at=datetime.utcnow();message='기존 단가를 수정했습니다.'
+   else:db.session.add(Price(device=device,carrier=carrier,sale_type=sale_type,price=price,rebate_amount=money(price),company_code=current_company()));message='단가를 등록했습니다.'
    audit('단가표 직접 등록','price','',f'{device} / {carrier} / {sale_type} / {price}');db.session.commit();flash(message,'success')
   return redirect(url_for('prices'))
  q=request.args.get('q','').strip();query=Price.query
@@ -2022,8 +2023,8 @@ def price_import():
     values={key:str(row[index] if index<len(row) and row[index] is not None else '').strip() for key,index in positions.items()}
     if not all(values.values()):skipped+=1;continue
     item=Price.query.filter_by(device=values['device'],carrier=values['carrier'],sale_type=values['sale_type']).first()
-    if item:item.price=values['price'];item.updated_at=datetime.utcnow();updated+=1
-    else:db.session.add(Price(**values,company_code=current_company()));imported+=1
+    if item:item.price=values['price'];item.rebate_amount=money(values['price']);item.updated_at=datetime.utcnow();updated+=1
+    else:db.session.add(Price(**values,rebate_amount=money(values['price']),company_code=current_company()));imported+=1
   if not imported and not updated:db.session.rollback();flash('필수 열을 찾지 못했거나 등록 가능한 행이 없습니다. 열 이름을 확인해주세요.','error');return redirect(url_for('prices'))
   audit('단가표 엑셀 업로드','price','',f'{secure_filename(upload.filename)} / 신규 {imported}건 / 수정 {updated}건 / 제외 {skipped}건');db.session.commit();flash(f'단가표 반영 완료: 신규 {imported}건, 수정 {updated}건, 제외 {skipped}건','success')
  except Exception:
