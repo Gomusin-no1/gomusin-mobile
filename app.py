@@ -366,6 +366,15 @@ def due_from_rule(d,rule):
   try:return add_months(d,int(rule[2:]))
   except:return None
  return parse_date(rule)
+def task_due_stage(due,today=None):
+ today=today or date.today()
+ if not due:return ('due-none','일정 없음')
+ days=(today-due).days
+ if days<=0:return ('due-today','D-Day') if days==0 else ('due-upcoming',f'D-{abs(days)}')
+ if days==1:return ('due-1','D+1')
+ if days==2:return ('due-2','D+2')
+ if days==3:return ('due-3','D+3')
+ return ('due-4',f'D+{days}')
 def calc_settlement(rebate,verbal,deduct,support,payback,opening_type='',sim_payment_type='없음',tax_rate=.133):
  base=rebate+verbal-deduct-support
  transfer_fee=800 if opening_type=='번호이동' else 0
@@ -1079,7 +1088,7 @@ def dashboard():
  branches={b.id:b for b in Branch.query.all()}
  sales_map={s.id:s for s in Sale.query.filter(Sale.id.in_([p.sale_id for p in today_paybacks] or [0])).all()}
  cal=calendar.Calendar(firstweekday=6); weeks=cal.monthdayscalendar(today.year,today.month)
- return render_template('dashboard.html',today=today,selected=selected,tasks=tasks,overdue=overdue,overdue_settlements=overdue_settlements,counts=counts,weeks=weeks,year=today.year,month=today.month,today_sales=len(today_sale_items),today_sale_items=today_sale_items,pending_paybacks=pending_paybacks,today_paybacks=today_paybacks,sales_map=sales_map,branches=branches)
+ return render_template('dashboard.html',today=today,selected=selected,tasks=tasks,overdue=overdue,overdue_settlements=overdue_settlements,counts=counts,weeks=weeks,year=today.year,month=today.month,today_sales=len(today_sale_items),today_sale_items=today_sale_items,pending_paybacks=pending_paybacks,today_paybacks=today_paybacks,sales_map=sales_map,branches=branches,task_due_stage=task_due_stage)
 
 @app.get('/notifications')
 @login_required
