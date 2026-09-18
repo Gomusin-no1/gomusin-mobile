@@ -201,6 +201,14 @@ class SignatureAndTenantTest(unittest.TestCase):
   with app.app_context():
    item=db.session.get(Sale,own_id);self.assertEqual('정상',item.settlement_status);self.assertEqual('A관리자',item.settlement_checked_by);self.assertIsNotNone(item.settlement_checked_at)
 
+ def test_overdue_settlement_alerts_are_company_scoped(self):
+  old=date.today()-timedelta(days=5)
+  with app.app_context():db.session.add_all([Sale(customer_name='A 지연정산',opening_date=old,branch_id=self.a_branch,assigned_staff='A관리자',settlement_status='미지급'),Sale(customer_name='A 정상완료',opening_date=old,branch_id=self.a_branch,settlement_status='정상'),Sale(customer_name='B 비공개지연',opening_date=old,branch_id=self.b_branch,settlement_status='추가금')]);db.session.commit()
+  self.login_as_a()
+  for path in ['/', '/notifications', '/sales?settlement_age=overdue']:
+   response=self.client.get(path);body=response.get_data(as_text=True);self.assertEqual(200,response.status_code);self.assertIn('A 지연정산',body);self.assertNotIn('A 정상완료',body);self.assertNotIn('B 비공개지연',body)
+  with self.client.session_transaction() as sess:self.assertGreaterEqual(sess.get('user_id',0),1)
+
  def test_monthly_performance_excel_is_company_isolated(self):
   from openpyxl import load_workbook
   with app.app_context():
