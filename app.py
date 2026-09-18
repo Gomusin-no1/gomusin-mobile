@@ -96,7 +96,7 @@ class Customer(db.Model):
 class Booking(db.Model):
  id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),nullable=False); phone=db.Column(db.String(30)); visit_date=db.Column(db.String(50)); device=db.Column(db.String(100)); memo=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
 class Price(db.Model):
- id=db.Column(db.Integer,primary_key=True); device=db.Column(db.String(100),nullable=False); carrier=db.Column(db.String(30),nullable=False); sale_type=db.Column(db.String(30),nullable=False); price=db.Column(db.String(100),nullable=False); updated_at=db.Column(db.DateTime,default=datetime.utcnow,onupdate=datetime.utcnow,nullable=False)
+ id=db.Column(db.Integer,primary_key=True); device=db.Column(db.String(100),nullable=False); carrier=db.Column(db.String(30),nullable=False); sale_type=db.Column(db.String(30),nullable=False); price=db.Column(db.String(100),nullable=False); company_code=db.Column(db.String(50),default='trustflow',nullable=False,index=True); updated_at=db.Column(db.DateTime,default=datetime.utcnow,onupdate=datetime.utcnow,nullable=False)
 class Partner(db.Model):
  id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),unique=True,nullable=False,index=True); category=db.Column(db.String(30)); contact_name=db.Column(db.String(50)); phone=db.Column(db.String(30)); settlement_cycle=db.Column(db.String(30)); default_tax_rate=db.Column(db.Float,default=0.133); active=db.Column(db.Boolean,default=True,nullable=False); memo=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
 class Inventory(db.Model):
@@ -387,6 +387,7 @@ def tenant_read_filter(execute_state):
   with_loader_criteria(User,lambda row:row.company_code==company,include_aliases=True),
   with_loader_criteria(AccountRequest,lambda row:row.company_code==company,include_aliases=True),
   with_loader_criteria(AuditLog,lambda row:row.company_code==company,include_aliases=True),
+  with_loader_criteria(Price,lambda row:row.company_code==company,include_aliases=True),
   with_loader_criteria(SmsCampaign,lambda row:row.company_code==company,include_aliases=True)
  )
 
@@ -395,7 +396,7 @@ def tenant_write_defaults(db_session,flush_context,instances):
  if not has_request_context() or not session.get('user_id'):return
  company=current_company()
  for obj in db_session.new:
-  if isinstance(obj,(Branch,Customer,SmsCampaign)) and not obj.company_code:obj.company_code=company
+  if isinstance(obj,(Branch,Customer,Price,SmsCampaign)) and not obj.company_code:obj.company_code=company
 
 def is_admin():
  return session.get('role')=='admin'
@@ -437,11 +438,10 @@ def sale_allowed(sale):
  return bool(sale and (is_admin() or (current_branch_id() and sale.branch_id==current_branch_id())))
 
 def task_query_scoped():
- q=CustomerTask.query.outerjoin(Sale,CustomerTask.sale_id==Sale.id)
- if not is_admin():
-  bid=current_branch_id()
-  q=q.filter(Sale.branch_id==bid) if bid else q.filter(CustomerTask.id==-1)
- return q
+ q=CustomerTask.query.outerjoin(Sale,CustomerTask.sale_id==Sale.id).outerjoin(Customer,CustomerTask.customer_id==Customer.id)
+ if is_admin():return q.filter(or_(Sale.branch_id.in_(db.session.query(Branch.id)),Customer.company_code==current_company()))
+ bid=current_branch_id()
+ return q.filter(or_(Sale.branch_id==bid,Customer.branch_id==bid)) if bid else q.filter(CustomerTask.id==-1)
 
 def payback_query_scoped():
  q=Payback.query.join(Sale,Payback.sale_id==Sale.id)
@@ -460,7 +460,7 @@ def can_approve_payback():
  except:return False
 
 def notification_summary():
- if not session.get('user_id'):return {'total':0,'overdue_tasks':0,'today_tasks':0,'pending_approvals':0,'account_requests':0,'due_paybacks':0,'legal_deadlines':0}
+ if not session.get('user_id'):return {'total':0,'overdue_tasks':0,'today_tasks':0,'pending_approvals':0,'account_requests':0,'due_paybacks':0,'legal_deadlines':0,'download_alerts':0}
  today=date.today(); open_states=['처리예정','연락안됨','연기']
  overdue_tasks=task_query_scoped().filter(CustomerTask.due_date<today,CustomerTask.status.in_(open_states)).count()
  today_tasks=task_query_scoped().filter(CustomerTask.due_date==today,CustomerTask.status.in_(open_states)).count()
@@ -470,7 +470,8 @@ def notification_summary():
  lq=apply_branch_scope(LegalCase.query,LegalCase)
  legal_deadlines=lq.filter(LegalCase.status.notin_(['완료','종결']),LegalCase.demand_due_date.isnot(None),LegalCase.demand_due_date<=today+timedelta(days=3)).count()
  account_requests=AccountRequest.query.filter_by(company_code=current_company(),status='대기').count() if is_admin() else 0
- return {'total':overdue_tasks+today_tasks+pending_approvals+account_requests+due_paybacks+legal_deadlines,'overdue_tasks':overdue_tasks,'today_tasks':today_tasks,'pending_approvals':pending_approvals,'account_requests':account_requests,'due_paybacks':due_paybacks,'legal_deadlines':legal_deadlines}
+ download_alerts=AuditLog.query.filter(AuditLog.action.ilike('%다운로드%'),AuditLog.created_at>=datetime.utcnow()-timedelta(days=7)).count() if is_admin() else 0
+ return {'total':overdue_tasks+today_tasks+pending_approvals+account_requests+due_paybacks+legal_deadlines+download_alerts,'overdue_tasks':overdue_tasks,'today_tasks':today_tasks,'pending_approvals':pending_approvals,'account_requests':account_requests,'due_paybacks':due_paybacks,'legal_deadlines':legal_deadlines,'download_alerts':download_alerts}
 
 def audit(action,target_type='',target_id='',detail='',branch_id=None,commit=False):
  try:
@@ -642,7 +643,7 @@ def seed_masters():
  db.session.commit()
 
 def prepare_database():
- db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','customer_type':"VARCHAR(30) DEFAULT '기존손님'",'address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)','hobbies':'VARCHAR(500)','interests':'VARCHAR(500)','marketing_consent':'BOOLEAN DEFAULT FALSE','marketing_consent_at':'TIMESTAMP','marketing_opt_out_at':'TIMESTAMP'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale()
+ db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','customer_type':"VARCHAR(30) DEFAULT '기존손님'",'address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)','hobbies':'VARCHAR(500)','interests':'VARCHAR(500)','marketing_consent':'BOOLEAN DEFAULT FALSE','marketing_consent_at':'TIMESTAMP','marketing_opt_out_at':'TIMESTAMP'}); _add_columns('price',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale()
  _add_columns('sms_campaign_recipient',{'last_attempt_at':'TIMESTAMP','next_attempt_at':'TIMESTAMP','attempt_count':'INTEGER DEFAULT 0'})
  if db.engine.dialect.name=='postgresql':
   try:
@@ -787,7 +788,7 @@ def sales_performance_data(month,branch_id=None):
  if branch_id:
   mobile_q=mobile_q.filter(Sale.branch_id==branch_id);wired_q=wired_q.filter(WiredSale.branch_id==branch_id)
  mobile=mobile_q.all();wired=wired_q.all();branch_names={b.id:b.name for b in Branch.query.order_by(Branch.id).all()}
- def blank(label):return {'label':label,'mobile_count':0,'wired_count':0,'settlement':0,'margin':0}
+ def blank(label):return {'label':label,'mobile_count':0,'wired_count':0,'settlement':0,'margin':0,'open_tasks':0,'overdue_tasks':0}
  branch_rows={};staff_rows={}
  combined=[(x,'mobile',x.settlement_amount_v2 or money(x.settlement)) for x in mobile]+[(x,'wired',x.settlement_amount or 0) for x in wired]
  for item,kind,settlement in combined:
@@ -795,6 +796,12 @@ def sales_performance_data(month,branch_id=None):
   staff_name=(item.assigned_staff or item.created_by or '미지정').strip() or '미지정';staff_key=(item.branch_id,staff_name)
   staff=staff_rows.setdefault(staff_key,blank(staff_name));staff['branch']=branch_names.get(item.branch_id,'미지정 지점')
   for row in (branch,staff):row[f'{kind}_count']+=1;row['settlement']+=settlement;row['margin']+=item.final_margin or 0
+ open_states=['처리예정','연락안됨','연기'];task_items=task_query_scoped().filter(CustomerTask.status.in_(open_states)).all();task_sales={s.id:s for s in apply_branch_scope(Sale.query,Sale).filter(Sale.id.in_([t.sale_id for t in task_items if t.sale_id] or [0])).all()};users=User.query.filter_by(active=True).all();user_branches={(u.display_name or u.username):u.branch_id for u in users}
+ for task in task_items:
+  task_sale=task_sales.get(task.sale_id);bid=task_sale.branch_id if task_sale else user_branches.get(task.assigned_staff)
+  if branch_id and bid!=branch_id:continue
+  name=(task.assigned_staff or '미지정').strip() or '미지정';row=staff_rows.setdefault((bid,name),blank(name));row['branch']=branch_names.get(bid,'미지정 지점');row['open_tasks']+=1
+  if task.due_date<date.today():row['overdue_tasks']+=1
  rows_branch=sorted(branch_rows.values(),key=lambda x:(x['margin'],x['mobile_count']+x['wired_count']),reverse=True)
  rows_staff=sorted(staff_rows.values(),key=lambda x:(x['margin'],x['mobile_count']+x['wired_count']),reverse=True)
  max_count=max([x['mobile_count']+x['wired_count'] for x in rows_branch+rows_staff] or [1]);max_margin=max([max(0,x['margin']) for x in rows_branch+rows_staff] or [1]) or 1
@@ -824,7 +831,7 @@ def sales_performance_export():
   ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
   for col in ws.columns:ws.column_dimensions[col[0].column_letter].width=min(30,max(13,max(len(str(c.value or '')) for c in col)+2))
  add_sheet('매장별 실적',['매장','모바일 건수','유선 건수','총 건수','정산매출','최종마진'],[(x['label'],x['mobile_count'],x['wired_count'],x['total_count'],x['settlement'],x['margin']) for x in branch_rows])
- add_sheet('직원별 실적',['매장','직원','모바일 건수','유선 건수','총 건수','정산매출','최종마진'],[(x['branch'],x['label'],x['mobile_count'],x['wired_count'],x['total_count'],x['settlement'],x['margin']) for x in staff_rows])
+ add_sheet('직원별 실적',['매장','직원','모바일 건수','유선 건수','총 건수','정산매출','최종마진','미처리 업무','기한초과'],[(x['branch'],x['label'],x['mobile_count'],x['wired_count'],x['total_count'],x['settlement'],x['margin'],x['open_tasks'],x['overdue_tasks']) for x in staff_rows])
  audit('월별 실적보고서 다운로드','report',month,f'지점 {branch_id or "전체"} · {totals["mobile_count"]+totals["wired_count"]}건');db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
  return send_file(out,as_attachment=True,download_name=f'TrustFlow_{month}_월별실적.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
@@ -1046,7 +1053,8 @@ def notifications():
  sale_ids=list({p.sale_id for p in due_paybacks+pending_approvals}); sales_map={s.id:s for s in Sale.query.filter(Sale.id.in_(sale_ids or [0])).all()}
  customer_ids=list({x.customer_id for x in legal_deadlines if x.customer_id}); customer_map={c.id:c for c in Customer.query.filter(Customer.id.in_(customer_ids or [0])).all()}
  account_requests=AccountRequest.query.filter_by(company_code=current_company(),status='대기').order_by(AccountRequest.created_at.asc()).limit(100).all() if is_admin() else []
- return render_template('notifications.html',today=today,overdue_tasks=overdue_tasks,today_tasks=today_tasks,due_paybacks=due_paybacks,pending_approvals=pending_approvals,account_requests=account_requests,legal_deadlines=legal_deadlines,sales_map=sales_map,customer_map=customer_map)
+ download_alerts=AuditLog.query.filter(AuditLog.action.ilike('%다운로드%'),AuditLog.created_at>=datetime.utcnow()-timedelta(days=7)).order_by(AuditLog.created_at.desc()).limit(100).all() if is_admin() else []
+ return render_template('notifications.html',today=today,overdue_tasks=overdue_tasks,today_tasks=today_tasks,due_paybacks=due_paybacks,pending_approvals=pending_approvals,account_requests=account_requests,legal_deadlines=legal_deadlines,sales_map=sales_map,customer_map=customer_map,download_alerts=download_alerts)
 
 @app.post('/tasks/<int:task_id>/status')
 @login_required
@@ -1878,6 +1886,67 @@ def wired_sale_edit(wid):
 @admin_required
 def wired_sale_delete(wid):
  item=WiredSale.query.get_or_404(wid); enforce_branch(item.branch_id); db.session.delete(item); db.session.commit(); flash('유선판매 내역이 삭제되었습니다.','success'); return redirect(url_for('wired_sales'))
+
+PRICE_HEADER_ALIASES={'device':{'기종','모델','모델명','단말기','단말기명','device','model'},'carrier':{'통신사','이동통신사','carrier','telecom'},'sale_type':{'유형','가입유형','판매유형','개통유형','type','saletype'},'price':{'가격','단가','정책','조건','가격조건','지원금','price','amount'}}
+
+def normalize_excel_header(value):
+ return ''.join(str(value or '').strip().lower().split()).replace('_','').replace('-','')
+
+@app.route('/prices',methods=['GET','POST'])
+@login_required
+@admin_required
+def prices():
+ prepare_database()
+ if request.method=='POST':
+  device=request.form.get('device','').strip();carrier=request.form.get('carrier','').strip();sale_type=request.form.get('sale_type','').strip();price=request.form.get('price','').strip()
+  if not all((device,carrier,sale_type,price)):flash('기종, 통신사, 가입유형, 가격을 모두 입력해주세요.','error')
+  else:
+   item=Price.query.filter_by(device=device,carrier=carrier,sale_type=sale_type).first()
+   if item:item.price=price;item.updated_at=datetime.utcnow();message='기존 단가를 수정했습니다.'
+   else:db.session.add(Price(device=device,carrier=carrier,sale_type=sale_type,price=price,company_code=current_company()));message='단가를 등록했습니다.'
+   audit('단가표 직접 등록','price','',f'{device} / {carrier} / {sale_type} / {price}');db.session.commit();flash(message,'success')
+  return redirect(url_for('prices'))
+ q=request.args.get('q','').strip();query=Price.query
+ if q:query=query.filter(or_(Price.device.ilike(f'%{q}%'),Price.carrier.ilike(f'%{q}%'),Price.sale_type.ilike(f'%{q}%')))
+ return render_template('prices.html',prices=query.order_by(Price.updated_at.desc(),Price.device).all(),q=q)
+
+@app.post('/prices/import')
+@login_required
+@admin_required
+def price_import():
+ upload=request.files.get('file')
+ if not upload or not upload.filename:flash('업로드할 엑셀 파일을 선택해주세요.','error');return redirect(url_for('prices'))
+ if not upload.filename.lower().endswith(('.xlsx','.xlsm')):flash('xlsx 또는 xlsm 파일만 업로드할 수 있습니다.','error');return redirect(url_for('prices'))
+ try:
+  from openpyxl import load_workbook
+  book=load_workbook(upload,read_only=True,data_only=True);imported=updated=skipped=0
+  normalized_aliases={key:{normalize_excel_header(x) for x in aliases} for key,aliases in PRICE_HEADER_ALIASES.items()}
+  for sheet in book.worksheets:
+   rows=sheet.iter_rows(values_only=True);header=next(rows,None)
+   if not header:continue
+   positions={}
+   for index,value in enumerate(header):
+    normalized=normalize_excel_header(value)
+    for key,aliases in normalized_aliases.items():
+     if normalized in aliases:positions.setdefault(key,index)
+   if set(positions)!=set(PRICE_HEADER_ALIASES):continue
+   for row in rows:
+    values={key:str(row[index] if index<len(row) and row[index] is not None else '').strip() for key,index in positions.items()}
+    if not all(values.values()):skipped+=1;continue
+    item=Price.query.filter_by(device=values['device'],carrier=values['carrier'],sale_type=values['sale_type']).first()
+    if item:item.price=values['price'];item.updated_at=datetime.utcnow();updated+=1
+    else:db.session.add(Price(**values,company_code=current_company()));imported+=1
+  if not imported and not updated:db.session.rollback();flash('필수 열을 찾지 못했거나 등록 가능한 행이 없습니다. 열 이름을 확인해주세요.','error');return redirect(url_for('prices'))
+  audit('단가표 엑셀 업로드','price','',f'{secure_filename(upload.filename)} / 신규 {imported}건 / 수정 {updated}건 / 제외 {skipped}건');db.session.commit();flash(f'단가표 반영 완료: 신규 {imported}건, 수정 {updated}건, 제외 {skipped}건','success')
+ except Exception:
+  db.session.rollback();flash('엑셀 파일을 읽지 못했습니다. 파일 형식과 열 이름을 확인해주세요.','error')
+ return redirect(url_for('prices'))
+
+@app.post('/prices/<int:pid>/delete')
+@login_required
+@admin_required
+def price_delete(pid):
+ item=Price.query.get_or_404(pid);detail=f'{item.device} / {item.carrier} / {item.sale_type}';db.session.delete(item);audit('단가 삭제','price',pid,detail);db.session.commit();flash('단가를 삭제했습니다.','success');return redirect(url_for('prices'))
 
 
 @app.route('/masters',methods=['GET','POST'])
