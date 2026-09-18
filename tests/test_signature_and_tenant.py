@@ -11,7 +11,7 @@ os.environ['ADMIN_USERNAME']=''
 os.environ['ADMIN_PASSWORD']=''
 
 from werkzeug.security import generate_password_hash, check_password_hash
-from app import app, db, User, Branch, Customer, CustomerTask, Inventory, InventoryMovement, DeviceMaster, Sale, WiredSale, CashLedger, AccountRequest, AuditLog, Price, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months
+from app import app, db, User, Branch, BranchMonthlyTarget, Customer, CustomerTask, Inventory, InventoryMovement, DeviceMaster, Sale, WiredSale, CashLedger, AccountRequest, AuditLog, Price, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months
 
 
 class SignatureAndTenantTest(unittest.TestCase):
@@ -179,6 +179,18 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.assertEqual(200,response.status_code);body=response.get_data(as_text=True)
   self.assertIn('A 본점',body);self.assertIn('김판매',body);self.assertIn('800,000원',body);self.assertIn('200,000원',body)
   self.assertNotIn('B 비공개실적',body);self.assertNotIn('타회사직원',body)
+
+ def test_admin_sets_company_scoped_branch_targets_and_sees_attainment(self):
+  month=date.today().strftime('%Y-%m');self.login_as_a();response=self.client.post('/reports/sales-performance/targets',data={'month':month,'branch_id':[str(self.a_branch)],f'mobile_goal_{self.a_branch}':'10',f'wired_goal_{self.a_branch}':'5',f'margin_goal_{self.a_branch}':'1,000,000'},follow_redirects=True)
+  self.assertEqual(200,response.status_code);body=response.get_data(as_text=True);self.assertIn('15건',body);self.assertIn('실적목표를 저장',body)
+  with app.app_context():
+   target=BranchMonthlyTarget.query.execution_options(skip_tenant=True).filter_by(company_code='company-a',branch_id=self.a_branch,month=month).one();self.assertEqual((10,5,1000000),(target.mobile_goal,target.wired_goal,target.margin_goal))
+   self.assertIsNone(BranchMonthlyTarget.query.execution_options(skip_tenant=True).filter_by(company_code='company-b',branch_id=self.a_branch,month=month).first())
+
+ def test_branch_target_rejects_another_company_branch(self):
+  month=date.today().strftime('%Y-%m');self.login_as_a();response=self.client.post('/reports/sales-performance/targets',data={'month':month,'branch_id':[str(self.b_branch)],f'mobile_goal_{self.b_branch}':'99'})
+  self.assertEqual(302,response.status_code)
+  with app.app_context():self.assertIsNone(BranchMonthlyTarget.query.execution_options(skip_tenant=True).filter_by(branch_id=self.b_branch,month=month).first())
 
  def test_sales_settlement_filters_and_admin_status_update(self):
   with app.app_context():
