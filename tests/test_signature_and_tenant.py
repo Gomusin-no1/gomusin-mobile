@@ -11,7 +11,7 @@ os.environ['ADMIN_USERNAME']=''
 os.environ['ADMIN_PASSWORD']=''
 
 from werkzeug.security import generate_password_hash, check_password_hash
-from app import app, db, User, Branch, Customer, CustomerTask, Inventory, InventoryMovement, Sale, WiredSale, CashLedger, AccountRequest, AuditLog, Price, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months
+from app import app, db, User, Branch, Customer, CustomerTask, Inventory, InventoryMovement, DeviceMaster, Sale, WiredSale, CashLedger, AccountRequest, AuditLog, Price, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months
 
 
 class SignatureAndTenantTest(unittest.TestCase):
@@ -132,6 +132,21 @@ class SignatureAndTenantTest(unittest.TestCase):
   sales=self.client.get('/sales');stock=self.client.get('/inventory')
   self.assertIn('A 판매고객'.encode(),sales.data);self.assertNotIn('B 비공개판매'.encode(),sales.data)
   self.assertIn(b'A-STOCK',stock.data);self.assertNotIn(b'B-STOCK',stock.data)
+
+ def test_inventory_excel_import_infers_device_and_skips_duplicates(self):
+  from openpyxl import Workbook
+  with app.app_context():
+   db.session.add(DeviceMaster(manufacturer='삼성',model='갤럭시 S26',capacities='256GB,512GB',colors='블랙,화이트',active=True));db.session.add(Inventory(serial_number='DUP-001',model='기존재고',branch_id=self.a_branch,status='보유중'));db.session.commit()
+  book=Workbook();sheet=book.active;sheet.append(['시리얼번호','기종','통신사','매입가','보관위치']);sheet.append(['NEW-001','갤럭시 S26 256GB 블랙','SKT','1,250,000원','창고 A']);sheet.append(['DUP-001','갤럭시 S26','KT',900000,'창고 B']);data=io.BytesIO();book.save(data);data.seek(0)
+  self.login_as_a();response=self.client.post('/inventory/import',data={'branch_id':str(self.a_branch),'file':(data,'stock.xlsx')},content_type='multipart/form-data',follow_redirects=True)
+  self.assertEqual(200,response.status_code);self.assertIn('등록 1건, 중복 1건'.encode(),response.data)
+  with app.app_context():
+   item=Inventory.query.filter_by(serial_number='NEW-001').one();self.assertEqual(('갤럭시 S26','삼성','256GB','블랙',1250000,self.a_branch),(item.model,item.manufacturer,item.capacity,item.color,item.purchase_price,item.branch_id));self.assertEqual('엑셀입고',InventoryMovement.query.filter_by(inventory_id=item.id).one().action)
+
+ def test_inventory_excel_import_rejects_staff(self):
+  self.login_as_a()
+  with app.app_context():user=db.session.get(User,self.a_user);user.role='staff';db.session.commit()
+  self.assertEqual(403,self.client.post('/inventory/import',data={}).status_code)
 
  def test_admin_cannot_delete_other_company_sale(self):
   with app.app_context():
