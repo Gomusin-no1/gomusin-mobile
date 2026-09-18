@@ -348,6 +348,15 @@ def parse_date(v):
 
 def add_months(d,n):
  m=d.month-1+n; y=d.year+m//12; m=m%12+1; return date(y,m,min(d.day,calendar.monthrange(y,m)[1]))
+def addon_rule_for_carrier(carrier):
+ carrier=(carrier or '').upper().replace(' ','')
+ if carrier.startswith('SK'):return 'M+1'
+ if carrier.startswith('LG'):return 'D+95'
+ if carrier.startswith('KT'):return 'M+3'
+ return 'D+93'
+def resolved_addon_rule(rule,carrier):
+ rule=(rule or '').upper().strip()
+ return addon_rule_for_carrier(carrier) if rule in ('','AUTO') else rule
 def due_from_rule(d,rule):
  rule=(rule or '').upper().strip()
  if rule.startswith('D+'):
@@ -1653,6 +1662,7 @@ def sale_new():
   for addon_name,rule in zip(names,rules):
    addon_name=addon_name.strip()
    if not addon_name:continue
+   rule=resolved_addon_rule(rule,sale.carrier)
    due=due_from_rule(opening,rule);db.session.add(SaleAddon(sale_id=sale.id,name=addon_name,retention_rule=rule,cancellation_due_date=due))
    if due:db.session.add(CustomerTask(customer_id=customer.id,sale_id=sale.id,task_type='부가서비스 해지',title=f'{name} 부가서비스 해지',description=f'{addon_name} · {rule}',due_date=due,assigned_staff=sale.assigned_staff,auto_created=True))
   if internet_due:db.session.add(CustomerTask(customer_id=customer.id,sale_id=sale.id,task_type='인터넷 해지',title=f'{name} 인터넷 해지',description=request.form.get('internet_carrier',''),due_date=internet_due,assigned_staff=sale.assigned_staff,auto_created=True))
@@ -1682,6 +1692,7 @@ def _rebuild_sale_automation(sale,form):
  for addon_name,rule in zip(names,rules):
   addon_name=addon_name.strip()
   if not addon_name: continue
+  rule=resolved_addon_rule(rule,sale.carrier)
   due=due_from_rule(opening,rule); db.session.add(SaleAddon(sale_id=sale.id,name=addon_name,retention_rule=rule,cancellation_due_date=due))
   if due: db.session.add(CustomerTask(customer_id=customer.id if customer else None,sale_id=sale.id,task_type='부가서비스 해지',title=f'{sale.customer_name} 부가서비스 해지',description=f'{addon_name} · {rule}',due_date=due,assigned_staff=sale.assigned_staff,auto_created=True))
  if sale.customer_payback>0:
