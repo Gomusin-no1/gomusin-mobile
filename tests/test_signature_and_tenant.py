@@ -89,6 +89,12 @@ class SignatureAndTenantTest(unittest.TestCase):
    user=db.session.get(User,self.a_user);user.role='staff';db.session.commit()
   self.assertEqual(403,self.client.get('/prices').status_code)
 
+ def test_sale_form_receives_only_company_price_policies(self):
+  with app.app_context():
+   db.session.add_all([Price(device='갤럭시 S26',carrier='SK',sale_type='번호이동',price='500,000원',rebate_amount=500000,company_code='company-a'),Price(device='타회사 비공개폰',carrier='KT',sale_type='기기변경',price='900,000원',rebate_amount=900000,company_code='company-b')]);db.session.commit()
+  self.login_as_a();response=self.client.get('/sales/new');body=response.get_data(as_text=True)
+  self.assertEqual(200,response.status_code);self.assertIn('"rebate_amount": 500000',body);self.assertIn('단가표 자동 적용',body);self.assertNotIn('"rebate_amount": 900000',body)
+
  def test_performance_report_includes_staff_workload_and_blocks_foreign_tasks(self):
   with app.app_context():
    own_sale=Sale(customer_name='A 업무고객',opening_date=date.today(),branch_id=self.a_branch,assigned_staff='A관리자');foreign_sale=Sale(customer_name='B 업무고객',opening_date=date.today(),branch_id=self.b_branch,assigned_staff='B관리자');db.session.add_all([own_sale,foreign_sale]);db.session.flush()
