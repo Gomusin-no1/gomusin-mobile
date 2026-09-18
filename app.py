@@ -1316,6 +1316,94 @@ def inventory():
  partners={p.id:p for p in Partner.query.all()}; branches={b.id:b for b in Branch.query.all()}; today=date.today()
  return render_template('inventory.html',items=items,partners=partners,branches=branches,branch_list=Branch.query.filter_by(active=True).order_by(Branch.id).all(),q=q,status=status,branch_id=branch_id,today=today)
 
+INVENTORY_HEADER_ALIASES={
+ 'serial_number':{'일련번호','시리얼','시리얼번호','serial','serialnumber','imei'},
+ 'model':{'모델','모델명','기종','단말기','단말기명','model','device'},
+ 'carrier':{'통신사','carrier','telecom'},'manufacturer':{'제조사','브랜드','manufacturer','maker'},
+ 'capacity':{'용량','메모리','capacity','storage'},'color':{'색상','컬러','color'},
+ 'purchase_price':{'입고단가','매입가','원가','purchaseprice','cost'},
+ 'received_date':{'입고일','입고날짜','receiveddate','date'},'storage_location':{'보관위치','위치','location'},
+ 'partner':{'거래처','매입처','partner','supplier'},'branch':{'지점','보유지점','매장','branch','store'}
+}
+
+def inventory_header_positions(header):
+ aliases={key:{normalize_excel_header(x) for x in values} for key,values in INVENTORY_HEADER_ALIASES.items()};positions={}
+ for index,value in enumerate(header or []):
+  normalized=normalize_excel_header(value)
+  for key,candidates in aliases.items():
+   if normalized in candidates:positions.setdefault(key,index)
+ return positions
+
+def infer_inventory_device(model_value,manufacturer='',capacity='',color=''):
+ raw=str(model_value or '').strip();normalized=normalize_excel_header(raw);matches=DeviceMaster.query.filter_by(active=True).all();best=None
+ for master in matches:
+  master_norm=normalize_excel_header(master.model)
+  if master_norm and (master_norm==normalized or master_norm in normalized or normalized in master_norm):
+   if not best or len(master_norm)>len(normalize_excel_header(best.model)):best=master
+ if best:
+  manufacturer=manufacturer or best.manufacturer
+  if not capacity:
+   for option in (best.capacities or '').split(','):
+    option=option.strip()
+    if option and normalize_excel_header(option) in normalized:capacity=option;break
+  if not color:
+   for option in (best.colors or '').split(','):
+    option=option.strip()
+    if option and normalize_excel_header(option) in normalized:color=option;break
+  raw=best.model
+ if not manufacturer:
+  lowered=raw.lower();manufacturer='애플' if any(x in lowered for x in ['iphone','아이폰']) else ('삼성' if any(x in lowered for x in ['galaxy','갤럭시']) else '기타')
+ return raw,manufacturer,capacity,color
+
+@app.get('/inventory/template.xlsx')
+@login_required
+@admin_required
+def inventory_template():
+ from openpyxl import Workbook
+ wb=Workbook();ws=wb.active;ws.title='재고 입고';ws.append(['일련번호','모델명','통신사','제조사','용량','색상','입고단가','입고일','보관위치','거래처','지점']);ws.append(['예시-SERIAL-001','갤럭시 S26 256GB','SK','삼성','256GB','블랙',0,date.today().isoformat(),'창고 A','',''])
+ out=io.BytesIO();wb.save(out);out.seek(0);audit('재고 업로드양식 다운로드','inventory','template','재고 입고 엑셀 양식',commit=True)
+ return send_file(out,as_attachment=True,download_name='TrustFlow_재고입고_양식.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+@app.post('/inventory/import')
+@login_required
+@admin_required
+def inventory_import():
+ upload=request.files.get('file');default_branch=request.form.get('branch_id');default_partner=request.form.get('partner_id') or None
+ if not upload or not upload.filename:flash('업로드할 재고 엑셀 파일을 선택해주세요.','error');return redirect(url_for('inventory'))
+ if not upload.filename.lower().endswith(('.xlsx','.xlsm')):flash('xlsx 또는 xlsm 파일만 업로드할 수 있습니다.','error');return redirect(url_for('inventory'))
+ if default_branch:
+  branch=Branch.query.filter_by(id=default_branch,active=True).first()
+  if not branch:abort(403)
+ else:branch=None
+ try:
+  from openpyxl import load_workbook
+  book=load_workbook(upload,read_only=True,data_only=True);created=duplicates=invalid=0;seen=set()
+  branch_by_name={normalize_excel_header(x.name):x for x in Branch.query.filter_by(active=True).all()};partner_by_name={normalize_excel_header(x.name):x for x in Partner.query.filter_by(active=True).all()}
+  existing={x[0] for x in db.session.query(Inventory.serial_number).all()}
+  for sheet in book.worksheets:
+   rows=sheet.iter_rows(values_only=True);header=next(rows,None);positions=inventory_header_positions(header)
+   if not {'serial_number','model'}.issubset(positions):continue
+   for row in rows:
+    def value(key):
+     index=positions.get(key);return row[index] if index is not None and index<len(row) else None
+    serial=str(value('serial_number') or '').strip();model=str(value('model') or '').strip()
+    if not serial or not model:invalid+=1;continue
+    if serial in existing or serial in seen:duplicates+=1;continue
+    row_branch=branch_by_name.get(normalize_excel_header(value('branch'))) if value('branch') else branch
+    if not row_branch:row_branch=branch
+    if not row_branch:invalid+=1;continue
+    row_partner=partner_by_name.get(normalize_excel_header(value('partner'))) if value('partner') else None
+    partner_id=row_partner.id if row_partner else default_partner
+    model,maker,capacity,color=infer_inventory_device(model,str(value('manufacturer') or '').strip(),str(value('capacity') or '').strip(),str(value('color') or '').strip())
+    received=value('received_date');received=received.date() if isinstance(received,datetime) else (received if isinstance(received,date) else parse_date(str(received or '')))
+    item=Inventory(serial_number=serial,partner_id=partner_id,carrier=str(value('carrier') or '').strip(),manufacturer=maker,model=model,capacity=capacity,color=color,received_date=received or date.today(),purchase_price=money(value('purchase_price')),storage_location=str(value('storage_location') or '').strip(),branch_id=row_branch.id,status='보유중',memo=f'엑셀 입고 · {secure_filename(upload.filename)}')
+    db.session.add(item);db.session.flush();db.session.add(InventoryMovement(inventory_id=item.id,action='엑셀입고',to_branch_id=item.branch_id,to_status='보유중',processed_by=session.get('display_name') or session.get('username'),memo=item.memo));seen.add(serial);created+=1
+  if not created:db.session.rollback();flash(f'등록된 재고가 없습니다. 중복 {duplicates}건, 오류·지점미지정 {invalid}건','error');return redirect(url_for('inventory'))
+  audit('재고 엑셀 업로드','inventory','',f'{secure_filename(upload.filename)} / 등록 {created}건 / 중복 {duplicates}건 / 제외 {invalid}건');db.session.commit();flash(f'재고 입고 완료: 등록 {created}건, 중복 {duplicates}건, 제외 {invalid}건','success')
+ except Exception:
+  db.session.rollback();flash('재고 엑셀을 읽지 못했습니다. 파일과 필수 열을 확인해주세요.','error')
+ return redirect(url_for('inventory'))
+
 @app.route('/inventory/new',methods=['GET','POST'])
 @login_required
 def inventory_new():
