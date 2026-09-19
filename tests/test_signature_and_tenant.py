@@ -305,6 +305,21 @@ class SignatureAndTenantTest(unittest.TestCase):
   with app.app_context():
    customer=Customer.query.filter_by(name='관심고객').one();self.assertEqual(('성지손님','낚시, 골프','카메라, 인터넷 결합'),(customer.customer_type,customer.hobbies,customer.interests))
 
+ def test_admin_can_bulk_import_customers_without_phone_duplicates(self):
+  from openpyxl import Workbook
+  book=Workbook();sheet=book.active;sheet.append(['고객명','휴대전화','고객유형','통신사','취미','문자수신동의'])
+  sheet.append(['신규고객',1077778888,'성지손님','SKT','낚시','동의']);sheet.append(['중복고객','01011112222','기존손님','KT','','미동의']);sheet.append(['번호오류','123','로드손님','LG','','동의'])
+  payload=io.BytesIO();book.save(payload);payload.seek(0);self.login_as_a()
+  response=self.client.post('/customers/import',data={'branch_id':str(self.a_branch),'file':(payload,'customers.xlsx')},content_type='multipart/form-data',follow_redirects=True)
+  self.assertEqual(200,response.status_code);self.assertIn('신규 1명, 중복 1명, 제외 1명'.encode(),response.data)
+  with app.app_context():
+   customer=Customer.query.filter_by(company_code='company-a',phone='01077778888').one();self.assertEqual(('신규고객','성지손님','SK','낚시',True,self.a_branch),(customer.name,customer.customer_type,customer.carrier,customer.hobbies,customer.marketing_consent,customer.branch_id));self.assertIsNone(Customer.query.filter_by(name='중복고객').first())
+
+ def test_customer_bulk_import_is_admin_only(self):
+  self.login_as_a()
+  with app.app_context():user=db.session.get(User,self.a_user);user.role='staff';db.session.commit()
+  self.assertEqual(403,self.client.get('/customers/template.xlsx').status_code);self.assertEqual(403,self.client.post('/customers/import').status_code)
+
  def test_next_contact_date_creates_single_followup_task(self):
   followup=date.today()+timedelta(days=3)
   with app.app_context():
