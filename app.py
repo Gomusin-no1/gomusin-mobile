@@ -1137,8 +1137,11 @@ def dashboard():
  today_bookings=selected_bookings if selected==today else booking_q.filter(Booking.visit_date.like(f'{today.isoformat()}%'),Booking.status=='예약').order_by(Booking.visit_date.asc()).all()
  branches={b.id:b for b in Branch.query.all()}
  sales_map={s.id:s for s in Sale.query.filter(Sale.id.in_([p.sale_id for p in today_paybacks] or [0])).all()}
+ performance_rows=[];performance_totals={}
+ if is_admin():
+  _,performance_rows,_,performance_totals=sales_performance_data(today.strftime('%Y-%m'))
  cal=calendar.Calendar(firstweekday=6); weeks=cal.monthdayscalendar(today.year,today.month)
- return render_template('dashboard.html',today=today,selected=selected,tasks=tasks,overdue=overdue,overdue_settlements=overdue_settlements,counts=counts,weeks=weeks,year=today.year,month=today.month,today_sales=len(today_sale_items),today_sale_items=today_sale_items,pending_paybacks=pending_paybacks,today_paybacks=today_paybacks,sales_map=sales_map,branches=branches,task_due_stage=task_due_stage,selected_bookings=selected_bookings,today_bookings=today_bookings)
+ return render_template('dashboard.html',today=today,selected=selected,tasks=tasks,overdue=overdue,overdue_settlements=overdue_settlements,counts=counts,weeks=weeks,year=today.year,month=today.month,today_sales=len(today_sale_items),today_sale_items=today_sale_items,pending_paybacks=pending_paybacks,today_paybacks=today_paybacks,sales_map=sales_map,branches=branches,task_due_stage=task_due_stage,selected_bookings=selected_bookings,today_bookings=today_bookings,performance_rows=performance_rows,performance_totals=performance_totals)
 
 @app.get('/notifications')
 @login_required
