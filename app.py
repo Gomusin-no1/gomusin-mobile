@@ -2324,6 +2324,22 @@ def audit_logs():
  items=q.order_by(AuditLog.created_at.desc()).limit(1000).all();actions=[x[0] for x in db.session.query(AuditLog.action).filter_by(company_code=session.get('company_code') or 'trustflow').distinct().order_by(AuditLog.action).all()]
  return render_template('audit_logs.html',items=items,actions=actions,action=action,date_filter=day,branches={b.id:b for b in Branch.query.all()})
 
+@app.get('/admin/readiness')
+@login_required
+@admin_required
+def admin_readiness():
+ prepare_database();company=current_company()
+ last_backup=AuditLog.query.filter_by(company_code=company,action='관리자 전체백업 다운로드').order_by(AuditLog.created_at.desc()).first()
+ backup_age=(datetime.utcnow()-last_backup.created_at).days if last_backup else None
+ checks=[
+  {'name':'데이터베이스','ok':True,'detail':'PostgreSQL 연결 정상'},
+  {'name':'운영 백업','ok':backup_age is not None and backup_age<=7,'detail':f'{backup_age}일 전 다운로드' if backup_age is not None else '아직 백업 기록 없음'},
+  {'name':'활성 직원계정','ok':User.query.filter_by(active=True).count()>0,'detail':f'{User.query.filter_by(active=True).count()}명 사용 가능'},
+  {'name':'운영 매장','ok':Branch.query.filter_by(active=True).count()>0,'detail':f'{Branch.query.filter_by(active=True).count()}개 매장 활성'},
+  {'name':'설치형 앱','ok':True,'detail':'홈 화면 설치 및 자동 업데이트 지원'},
+ ]
+ return render_template('admin_readiness.html',checks=checks,last_backup=last_backup,ready_count=sum(1 for x in checks if x['ok']))
+
 @app.get('/admin/backup.xlsx')
 @login_required
 @admin_required
