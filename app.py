@@ -288,7 +288,7 @@ def _send_sms(phone,message):
    return False
  endpoint=os.environ.get('SMS_WEBHOOK_URL','').strip(); token=os.environ.get('SMS_WEBHOOK_TOKEN','').strip()
  if not endpoint:return False
- payload=json.dumps({'to':phone,'message':message,'sender':sender or 'TrustFlow'},ensure_ascii=False).encode()
+ payload=json.dumps({'to':phone,'message':message,'sender':sender or 'TrustMap'},ensure_ascii=False).encode()
  headers={'Content-Type':'application/json'}
  if token:headers['Authorization']=f'Bearer {token}'
  try:
@@ -336,7 +336,7 @@ def issue_phone_code(purpose,company,phone):
  code=os.environ.get('SMS_TEST_CODE','123456') if app.config.get('TESTING') else f'{secrets.randbelow(1000000):06d}'
  item=PhoneVerification(purpose=purpose,company_code=company,phone=phone,code_hash=_verification_hash(code),expires_at=now+timedelta(minutes=5))
  db.session.add(item);db.session.commit()
- if not _send_sms(phone,f'[TrustFlow] 인증번호는 {code}입니다. 5분 안에 입력해주세요.'):
+ if not _send_sms(phone,f'[TrustMap] 인증번호는 {code}입니다. 5분 안에 입력해주세요.'):
   db.session.delete(item);db.session.commit();return False,'문자 인증 서비스 연결이 아직 완료되지 않았습니다. 관리자에게 문의해주세요.'
  return True,'인증번호를 문자로 보냈습니다. 5분 안에 입력해주세요.'
 
@@ -899,7 +899,7 @@ def sales_performance_export():
  add_sheet('매장별 실적',['매장','모바일 건수','모바일 목표','유선 건수','유선 목표','총 건수','건수 달성률','정산매출','최종마진','마진 목표','마진 달성률'],[(x['label'],x['mobile_count'],x['mobile_goal'],x['wired_count'],x['wired_goal'],x['total_count'],x['goal_count_pct'],x['settlement'],x['margin'],x['margin_goal'],x['goal_margin_pct']) for x in branch_rows])
  add_sheet('직원별 실적',['매장','직원','모바일 건수','유선 건수','총 건수','정산매출','최종마진','미처리 업무','기한초과'],[(x['branch'],x['label'],x['mobile_count'],x['wired_count'],x['total_count'],x['settlement'],x['margin'],x['open_tasks'],x['overdue_tasks']) for x in staff_rows])
  audit('월별 실적보고서 다운로드','report',month,f'지점 {branch_id or "전체"} · {totals["mobile_count"]+totals["wired_count"]}건');db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
- return send_file(out,as_attachment=True,download_name=f'TrustFlow_{month}_월별실적.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+ return send_file(out,as_attachment=True,download_name=f'TrustMap_{month}_월별실적.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 @app.route('/cash-ledger',methods=['GET','POST'])
 @login_required
@@ -944,7 +944,7 @@ def cash_ledger_export():
  ws.append(['월 현금잔액','','','','',sum(x.amount for x in items if x.direction=='입금' and x.payment_method=='현금'),sum(x.amount for x in items if x.direction=='출금' and x.payment_method=='현금'),'','',''])
  for col,w in zip('ABCDEFGHIJ',[13,16,10,18,12,14,14,18,35,14]):ws.column_dimensions[col].width=w
  audit('시재 엑셀 다운로드','cash_ledger',month,f'지점 {branch_id or "전체"} · {len(items)}건');db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
- return send_file(out,as_attachment=True,download_name=f'TrustFlow_{month}_시재관리.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+ return send_file(out,as_attachment=True,download_name=f'TrustMap_{month}_시재관리.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 @app.post('/cash-ledger/<int:ledger_id>/delete')
 @login_required
@@ -976,7 +976,7 @@ def card_sales():
 
 @app.post('/api/card-sales/<terminal_number>')
 def card_sales_webhook(terminal_number):
- terminal=CardTerminal.query.filter_by(terminal_number=terminal_number,active=True).first_or_404(); token=request.headers.get('X-TrustFlow-Key') or request.args.get('token')
+ terminal=CardTerminal.query.filter_by(terminal_number=terminal_number,active=True).first_or_404(); token=request.headers.get('X-TrustMap-Key') or request.headers.get('X-TrustFlow-Key') or request.args.get('token')
  if not secrets.compare_digest(token or '',terminal.api_token):abort(403)
  data=request.get_json(silent=True) or {}; approval=str(data.get('approval_number') or '').strip(); amount=abs(money(data.get('amount'))); status=str(data.get('status') or '승인')
  if not approval or amount<=0:return jsonify({'ok':False,'error':'approval_number and amount required'}),400
@@ -1035,7 +1035,7 @@ def ob_management_export():
  ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
  for col,w in zip('ABCDEFGHIJ',[16,16,13,14,12,16,20,14,16,14]):ws.column_dimensions[col].width=w
  audit('OB 고객 엑셀 다운로드','customer','ob',f'{len(rows)}명');db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
- return send_file(out,as_attachment=True,download_name=f'TrustFlow_OB고객_{date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+ return send_file(out,as_attachment=True,download_name=f'TrustMap_OB고객_{date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 @app.post('/customers/<int:cid>/contact-log')
 @login_required
@@ -1082,7 +1082,7 @@ def legal_case_status(case_id):
 @login_required
 def legal_case_notice(case_id):
  x=LegalCase.query.get_or_404(case_id);enforce_branch(x.branch_id);c=Customer.query.get_or_404(x.customer_id);b=Branch.query.get(x.branch_id)
- text_body=f'''내용증명\n\n수신인: {c.name}\n주소: {x.debtor_address or c.address_road or c.address_jibun or '[주소 확인 필요]'}\n발신인: {b.name if b else 'TrustFlow 등록 사업자'}\n\n제목: {x.case_type} 관련 금원 지급 요청\n\n1. 발생일: {x.incident_date or '[확인 필요]'}\n2. 청구금액: {x.claim_amount:,}원\n3. 청구사유: {x.reason or '[구체적 사실관계 입력 필요]'}\n4. 보유 증빙: {x.evidence or '[계약서·입금내역·대화내역 등 확인 필요]'}\n5. 지급기한: {x.demand_due_date or '[기한 입력 필요]'}\n\n위 기한까지 지급 또는 협의가 없을 경우 지급명령·소액사건심판 등 적법한 절차를 검토할 수 있음을 알려드립니다.\n\n작성일: {date.today()}\n발신인: ____________________\n\n※ 본 문서는 내부 업무용 초안입니다. 발송 전 사실관계·계약·개인정보·관할법원을 확인하고 필요한 경우 변호사 또는 법률구조기관의 검토를 받으세요.'''
+ text_body=f'''내용증명\n\n수신인: {c.name}\n주소: {x.debtor_address or c.address_road or c.address_jibun or '[주소 확인 필요]'}\n발신인: {b.name if b else 'TrustMap 등록 사업자'}\n\n제목: {x.case_type} 관련 금원 지급 요청\n\n1. 발생일: {x.incident_date or '[확인 필요]'}\n2. 청구금액: {x.claim_amount:,}원\n3. 청구사유: {x.reason or '[구체적 사실관계 입력 필요]'}\n4. 보유 증빙: {x.evidence or '[계약서·입금내역·대화내역 등 확인 필요]'}\n5. 지급기한: {x.demand_due_date or '[기한 입력 필요]'}\n\n위 기한까지 지급 또는 협의가 없을 경우 지급명령·소액사건심판 등 적법한 절차를 검토할 수 있음을 알려드립니다.\n\n작성일: {date.today()}\n발신인: ____________________\n\n※ 본 문서는 내부 업무용 초안입니다. 발송 전 사실관계·계약·개인정보·관할법원을 확인하고 필요한 경우 변호사 또는 법률구조기관의 검토를 받으세요.'''
  audit('법률서식 다운로드','legal_case',x.id,f'{c.name} · {x.case_type}',x.branch_id);db.session.commit();out=io.BytesIO(text_body.encode('utf-8-sig'));return send_file(out,as_attachment=True,download_name=f'{c.name}_내용증명_초안.txt',mimetype='text/plain; charset=utf-8')
 
 @app.route('/bookings',methods=['GET','POST'])
@@ -1282,7 +1282,7 @@ def customers_export():
  ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
  for col,width in {'A':16,'B':16,'C':13,'D':10,'E':32,'F':32,'G':22,'H':22,'I':28,'J':14}.items():ws.column_dimensions[col].width=width
  audit('고객목록 다운로드','customer','',f'{len(rows)}명 · 유형 {customer_type or "전체"}');db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
- return send_file(out,as_attachment=True,download_name=f'TrustFlow_고객목록_{date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+ return send_file(out,as_attachment=True,download_name=f'TrustMap_고객목록_{date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 CUSTOMER_HEADER_ALIASES={
  'name':{'고객명','이름','성명','name','customer'},'phone':{'휴대전화','휴대폰','전화번호','연락처','핸드폰','phone','mobile'},
@@ -1318,7 +1318,7 @@ def customers_template():
  ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
  for col,width in zip('ABCDEFGHIJKL',[16,16,13,10,34,34,22,20,24,30,15,16]):ws.column_dimensions[col].width=width
  out=io.BytesIO();wb.save(out);out.seek(0);audit('고객 업로드양식 다운로드','customer','template','고객 일괄등록 엑셀 양식',commit=True)
- return send_file(out,as_attachment=True,download_name='TrustFlow_고객일괄등록_양식.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+ return send_file(out,as_attachment=True,download_name='TrustMap_고객일괄등록_양식.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 @app.post('/customers/import')
 @login_required
@@ -1446,7 +1446,7 @@ def sms_campaign_new():
   if not name or not message or start>=end:flash('캠페인명·문구와 올바른 개통월 범위를 입력해주세요.','error');return redirect(url_for('sms_campaign_new'))
   bid=int(branch_id) if branch_id else None
   if bid:enforce_branch(bid)
-  campaign=SmsCampaign(company_code=current_company(),name=name,message=message,start_month=start_month,end_month=end_month,branch_id=bid,daily_limit=daily_limit,status='승인대기',sender_name=os.environ.get('SMS_SENDER_NAME','TrustFlow').strip(),sender_contact=normalize_phone(os.environ.get('SMS_CONTACT') or os.environ.get('SMS_SENDER')),opt_out_number=os.environ.get('SMS_OPT_OUT_NUMBER','').strip(),created_by=session.get('display_name') or session.get('username'));db.session.add(campaign);db.session.flush()
+  campaign=SmsCampaign(company_code=current_company(),name=name,message=message,start_month=start_month,end_month=end_month,branch_id=bid,daily_limit=daily_limit,status='승인대기',sender_name=os.environ.get('SMS_SENDER_NAME','TrustMap').strip(),sender_contact=normalize_phone(os.environ.get('SMS_CONTACT') or os.environ.get('SMS_SENDER')),opt_out_number=os.environ.get('SMS_OPT_OUT_NUMBER','').strip(),created_by=session.get('display_name') or session.get('username'));db.session.add(campaign);db.session.flush()
   sq=Sale.query.filter(Sale.opening_date>=start,Sale.opening_date<end,Sale.customer_phone.isnot(None));sq=sq.filter(Sale.branch_id==bid) if bid else apply_branch_scope(sq,Sale)
   phones=[]
   for (phone,) in sq.with_entities(Sale.customer_phone).order_by(Sale.opening_date,Sale.id).all():
@@ -1561,7 +1561,7 @@ def inventory_template():
  from openpyxl import Workbook
  wb=Workbook();ws=wb.active;ws.title='재고 입고';ws.append(['일련번호','모델명','통신사','제조사','용량','색상','입고단가','입고일','보관위치','거래처','지점']);ws.append(['예시-SERIAL-001','갤럭시 S26 256GB','SK','삼성','256GB','블랙',0,date.today().isoformat(),'창고 A','',''])
  out=io.BytesIO();wb.save(out);out.seek(0);audit('재고 업로드양식 다운로드','inventory','template','재고 입고 엑셀 양식',commit=True)
- return send_file(out,as_attachment=True,download_name='TrustFlow_재고입고_양식.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+ return send_file(out,as_attachment=True,download_name='TrustMap_재고입고_양식.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 @app.post('/inventory/import')
 @login_required
@@ -1938,7 +1938,7 @@ def sales_export():
  ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
  for col in ws.columns:ws.column_dimensions[col[0].column_letter].width=min(28,max(12,max(len(str(c.value or '')) for c in col)+2))
  audit('판매 정산 엑셀 다운로드','sale',filters['month'] or filters['day'] or '전체',f'{len(items)}건',int(filters['branch_id']) if filters['branch_id'].isdigit() else None);db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
- return send_file(out,as_attachment=True,download_name=f'TrustFlow_판매정산_{filters["month"] or filters["day"] or date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+ return send_file(out,as_attachment=True,download_name=f'TrustMap_판매정산_{filters["month"] or filters["day"] or date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 @app.post('/sales/<int:sid>/settlement-status')
 @login_required
@@ -2095,7 +2095,7 @@ def payback_bulk_transfer():
    s=sales.get(p.sale_id);bank_ws.append([p.bank or '',p.account_number or '',p.amount,'고무신모바일',f'{month} {s.customer_name if s else p.account_holder}'])
   bank_ws.freeze_panes='A2'
  audit('페이백 대량이체 다운로드','payback','bulk',f'{len(items)}건 / {sum(p.amount for p in items):,}원');db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
- return send_file(out,as_attachment=True,download_name=f'TrustFlow_페이백대량이체_{date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+ return send_file(out,as_attachment=True,download_name=f'TrustMap_페이백대량이체_{date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 @app.post('/paybacks/<int:pid>/reopen')
 @login_required
@@ -2389,9 +2389,9 @@ def account_request_complete(request_id):
    except:flash('승인할 직원의 소속 지점을 선택해주세요.','error');return redirect(url_for('staff'))
    branch=Branch.query.filter_by(id=branch_id,company_code=item.company_code,active=True).first()
    if not branch:abort(403)
-   user.branch_id=branch.id;user.active=True;item.status='승인';message=f'{branch.name} 직원으로 가입을 승인했습니다.';sms_message=f'[TrustFlow] {user.display_name or user.username}님의 가입이 승인되었습니다. 회사 전체아이디와 개인아이디로 로그인해주세요.'
+   user.branch_id=branch.id;user.active=True;item.status='승인';message=f'{branch.name} 직원으로 가입을 승인했습니다.';sms_message=f'[TrustMap] {user.display_name or user.username}님의 가입이 승인되었습니다. 회사 전체아이디와 개인아이디로 로그인해주세요.'
   elif decision=='reject':
-   user.active=False;item.status='반려';message='직원 가입을 반려했습니다.';sms_message=f'[TrustFlow] {user.display_name or user.username}님의 가입 신청이 반려되었습니다. 회사 관리자에게 문의해주세요.'
+   user.active=False;item.status='반려';message='직원 가입을 반려했습니다.';sms_message=f'[TrustMap] {user.display_name or user.username}님의 가입 신청이 반려되었습니다. 회사 관리자에게 문의해주세요.'
   else:flash('승인 또는 반려를 선택해주세요.','error');return redirect(url_for('staff'))
   audit(f'직원 가입 {item.status}','user',user.id,f'{user.display_name or user.username} ({user.username})')
  else:
@@ -2457,7 +2457,7 @@ def admin_backup():
  sheet('유선판매',['ID','판매일','지점','고객명','휴대전화','통신사','상품','설치예정일','설치일','상태','담당자','정산금','최종마진'],[(x.id,x.sale_date,branch_names.get(x.branch_id),x.customer_name,x.customer_phone,x.carrier,x.product_type,x.install_due_date,x.install_date,x.status,x.assigned_staff,x.settlement_amount,x.final_margin) for x in apply_branch_scope(WiredSale.query,WiredSale).order_by(WiredSale.id).all()])
  sheet('직원계정',['ID','개인아이디','표시이름','권한','지점','활성상태','페이백승인','등록일'],[(x.id,x.username,x.display_name,x.role,branch_names.get(x.branch_id),x.active,x.can_approve_payback,x.created_at) for x in User.query.order_by(User.id).all()])
  audit('관리자 전체백업 다운로드','system','backup',f'{date.today()} 운영데이터 11개 시트');db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
- return send_file(out,as_attachment=True,download_name=f'TrustFlow_운영백업_{date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+ return send_file(out,as_attachment=True,download_name=f'TrustMap_운영백업_{date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 @app.get('/admin/backup.zip')
 @login_required
@@ -2515,7 +2515,7 @@ def admin_archive_backup():
    filename=secure_filename(document.original_name) or f'document-{document.id}'
    path=f'documents/{document.sale_id}/{document.id}-{filename}';payload=bytes(document.file_data or b'')
    bundle.writestr(path,payload);manifest['files'][path]=hashlib.sha256(payload).hexdigest()
-  guide=('TrustFlow complete backup\n\nThis archive contains company data as UTF-8 JSON and original uploaded sales documents.\n'
+  guide=('TrustMap complete backup\n\nThis archive contains company data as UTF-8 JSON and original uploaded sales documents.\n'
          'manifest.json records row counts and SHA-256 checksums. Keep this file in a secure location.\n').encode('utf-8')
   bundle.writestr('README.txt',guide);manifest['files']['README.txt']=hashlib.sha256(guide).hexdigest()
   bundle.writestr('manifest.json',json.dumps(manifest,ensure_ascii=False,indent=2).encode('utf-8'))
@@ -2527,4 +2527,4 @@ def admin_archive_backup():
    if hashlib.sha256(verification.read(path)).hexdigest()!=digest:abort(500)
  archive.seek(0);size=archive.getbuffer().nbytes
  audit('관리자 전체보관백업 다운로드','system','backup',f'{date.today()} · {len(datasets)}개 데이터묶음 · 서류 {len(datasets["sale_documents"])}개 · {size} bytes · 무결성검증 완료');db.session.commit()
- return send_file(archive,as_attachment=True,download_name=f'TrustFlow_전체보관백업_{date.today()}.zip',mimetype='application/zip')
+ return send_file(archive,as_attachment=True,download_name=f'TrustMap_전체보관백업_{date.today()}.zip',mimetype='application/zip')
