@@ -529,5 +529,15 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.assertIn('직원별 상세 보기',body)
   self.assertIn('이번 달 등록된 매장 실적이 없습니다.',body)
 
+ def test_admin_receives_persistent_backup_warning(self):
+  self.login_as_a();response=self.client.get('/notifications')
+  body=response.get_data(as_text=True)
+  self.assertIn('운영 데이터 보호 확인이 필요합니다.',body)
+  self.assertIn('전체 백업 받기',body)
+  with app.app_context():
+   db.session.add(AuditLog(company_code='company-a',username='A관리자',action='관리자 전체백업 다운로드',created_at=datetime.utcnow()));db.session.commit()
+  body=self.client.get('/notifications').get_data(as_text=True)
+  self.assertNotIn('최근 7일 이내 전체 백업 기록이 없습니다.',body)
+
 
 if __name__=='__main__':unittest.main()
