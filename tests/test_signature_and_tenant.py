@@ -521,5 +521,13 @@ class SignatureAndTenantTest(unittest.TestCase):
    user=db.session.get(User,self.a_user);user.role='staff';db.session.commit()
   self.assertEqual(403,self.client.get('/admin/readiness').status_code)
 
+ def test_admin_dashboard_surfaces_monthly_store_performance(self):
+  self.login_as_a();response=self.client.get('/')
+  self.assertEqual(200,response.status_code)
+  body=response.get_data(as_text=True)
+  self.assertIn('매장별 실적',body)
+  self.assertIn('직원별 상세 보기',body)
+  self.assertIn('이번 달 등록된 매장 실적이 없습니다.',body)
+
 
 if __name__=='__main__':unittest.main()
