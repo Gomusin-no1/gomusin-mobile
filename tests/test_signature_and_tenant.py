@@ -510,5 +510,16 @@ class SignatureAndTenantTest(unittest.TestCase):
   page=self.client.get('/').get_data(as_text=True)
   self.assertIn('manifest.webmanifest',page)
 
+ def test_admin_readiness_is_admin_only_and_reports_backup(self):
+  self.login_as_a()
+  response=self.client.get('/admin/readiness')
+  self.assertEqual(200,response.status_code)
+  body=response.get_data(as_text=True)
+  self.assertIn('운영 준비 점검',body)
+  self.assertIn('전체 백업 받기',body)
+  with app.app_context():
+   user=db.session.get(User,self.a_user);user.role='staff';db.session.commit()
+  self.assertEqual(403,self.client.get('/admin/readiness').status_code)
+
 
 if __name__=='__main__':unittest.main()
