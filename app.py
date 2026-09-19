@@ -496,7 +496,7 @@ def can_approve_payback():
  except:return False
 
 def notification_summary():
- if not session.get('user_id'):return {'total':0,'overdue_tasks':0,'today_tasks':0,'pending_approvals':0,'account_requests':0,'due_paybacks':0,'legal_deadlines':0,'download_alerts':0,'overdue_settlements':0}
+ if not session.get('user_id'):return {'total':0,'overdue_tasks':0,'today_tasks':0,'pending_approvals':0,'account_requests':0,'due_paybacks':0,'legal_deadlines':0,'download_alerts':0,'overdue_settlements':0,'backup_due':0,'database_expiry_due':0}
  today=date.today(); open_states=['처리예정','연락안됨','연기']
  overdue_tasks=task_query_scoped().filter(CustomerTask.due_date<today,CustomerTask.status.in_(open_states)).count()
  today_tasks=task_query_scoped().filter(CustomerTask.due_date==today,CustomerTask.status.in_(open_states)).count()
@@ -508,7 +508,11 @@ def notification_summary():
  account_requests=AccountRequest.query.filter_by(company_code=current_company(),status='대기').count() if is_admin() else 0
  download_alerts=AuditLog.query.filter(AuditLog.action.ilike('%다운로드%'),AuditLog.created_at>=datetime.utcnow()-timedelta(days=7)).count() if is_admin() else 0
  overdue_settlements=overdue_settlement_query(today).count()
- return {'total':overdue_tasks+today_tasks+pending_approvals+account_requests+due_paybacks+legal_deadlines+download_alerts+overdue_settlements,'overdue_tasks':overdue_tasks,'today_tasks':today_tasks,'pending_approvals':pending_approvals,'account_requests':account_requests,'due_paybacks':due_paybacks,'legal_deadlines':legal_deadlines,'download_alerts':download_alerts,'overdue_settlements':overdue_settlements}
+ last_backup=AuditLog.query.filter_by(company_code=current_company(),action='관리자 전체백업 다운로드').order_by(AuditLog.created_at.desc()).first() if is_admin() else None
+ backup_due=1 if is_admin() and (not last_backup or last_backup.created_at<datetime.utcnow()-timedelta(days=7)) else 0
+ expiry=parse_date(os.environ.get('DATABASE_EXPIRES_AT')) if is_admin() else None
+ database_expiry_due=1 if expiry and expiry<=today+timedelta(days=30) else 0
+ return {'total':overdue_tasks+today_tasks+pending_approvals+account_requests+due_paybacks+legal_deadlines+download_alerts+overdue_settlements+backup_due+database_expiry_due,'overdue_tasks':overdue_tasks,'today_tasks':today_tasks,'pending_approvals':pending_approvals,'account_requests':account_requests,'due_paybacks':due_paybacks,'legal_deadlines':legal_deadlines,'download_alerts':download_alerts,'overdue_settlements':overdue_settlements,'backup_due':backup_due,'database_expiry_due':database_expiry_due}
 
 def audit(action,target_type='',target_id='',detail='',branch_id=None,commit=False):
  try:
@@ -1158,7 +1162,11 @@ def notifications():
  account_requests=AccountRequest.query.filter_by(company_code=current_company(),status='대기').order_by(AccountRequest.created_at.asc()).limit(100).all() if is_admin() else []
  download_alerts=AuditLog.query.filter(AuditLog.action.ilike('%다운로드%'),AuditLog.created_at>=datetime.utcnow()-timedelta(days=7)).order_by(AuditLog.created_at.desc()).limit(100).all() if is_admin() else []
  overdue_settlements=overdue_settlement_query(today).order_by(Sale.opening_date.asc()).limit(100).all()
- return render_template('notifications.html',today=today,overdue_tasks=overdue_tasks,today_tasks=today_tasks,due_paybacks=due_paybacks,pending_approvals=pending_approvals,account_requests=account_requests,legal_deadlines=legal_deadlines,sales_map=sales_map,customer_map=customer_map,download_alerts=download_alerts,overdue_settlements=overdue_settlements)
+ last_backup=AuditLog.query.filter_by(company_code=current_company(),action='관리자 전체백업 다운로드').order_by(AuditLog.created_at.desc()).first() if is_admin() else None
+ backup_due=is_admin() and (not last_backup or last_backup.created_at<datetime.utcnow()-timedelta(days=7))
+ database_expiry=parse_date(os.environ.get('DATABASE_EXPIRES_AT')) if is_admin() else None
+ database_days_left=(database_expiry-today).days if database_expiry else None
+ return render_template('notifications.html',today=today,overdue_tasks=overdue_tasks,today_tasks=today_tasks,due_paybacks=due_paybacks,pending_approvals=pending_approvals,account_requests=account_requests,legal_deadlines=legal_deadlines,sales_map=sales_map,customer_map=customer_map,download_alerts=download_alerts,overdue_settlements=overdue_settlements,last_backup=last_backup,backup_due=backup_due,database_expiry=database_expiry,database_days_left=database_days_left)
 
 @app.post('/tasks/<int:task_id>/status')
 @login_required
@@ -2334,14 +2342,16 @@ def admin_readiness():
  prepare_database();company=current_company()
  last_backup=AuditLog.query.filter_by(company_code=company,action='관리자 전체백업 다운로드').order_by(AuditLog.created_at.desc()).first()
  backup_age=(datetime.utcnow()-last_backup.created_at).days if last_backup else None
+ database_expiry=parse_date(os.environ.get('DATABASE_EXPIRES_AT'));database_days_left=(database_expiry-date.today()).days if database_expiry else None
  checks=[
   {'name':'데이터베이스','ok':True,'detail':'PostgreSQL 연결 정상'},
   {'name':'운영 백업','ok':backup_age is not None and backup_age<=7,'detail':f'{backup_age}일 전 다운로드' if backup_age is not None else '아직 백업 기록 없음'},
   {'name':'활성 직원계정','ok':User.query.filter_by(active=True).count()>0,'detail':f'{User.query.filter_by(active=True).count()}명 사용 가능'},
   {'name':'운영 매장','ok':Branch.query.filter_by(active=True).count()>0,'detail':f'{Branch.query.filter_by(active=True).count()}개 매장 활성'},
   {'name':'설치형 앱','ok':True,'detail':'홈 화면 설치 및 자동 업데이트 지원'},
+  {'name':'데이터베이스 사용기간','ok':database_days_left is None or database_days_left>30,'detail':f'{database_expiry}까지 · {database_days_left}일 남음' if database_expiry else '만료일 설정 없음'},
  ]
- return render_template('admin_readiness.html',checks=checks,last_backup=last_backup,ready_count=sum(1 for x in checks if x['ok']))
+ return render_template('admin_readiness.html',checks=checks,last_backup=last_backup,ready_count=sum(1 for x in checks if x['ok']),database_expiry=database_expiry,database_days_left=database_days_left)
 
 @app.get('/admin/backup.xlsx')
 @login_required
