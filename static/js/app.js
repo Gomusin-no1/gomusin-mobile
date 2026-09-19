@@ -28,3 +28,17 @@ document.querySelectorAll('.unified-nav .nav-section').forEach(section=>{
     });
   });
 });
+
+// Installable app shell. Only the offline notice and icon are cached; business data remains server-only.
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}))}
+let installPrompt;
+window.addEventListener('beforeinstallprompt',event=>{
+  event.preventDefault();installPrompt=event;
+  const actions=document.querySelector('.top-actions');
+  if(!actions||actions.querySelector('[data-install-app]'))return;
+  const button=document.createElement('button');
+  button.type='button';button.className='install-app';button.dataset.installApp='';button.textContent='앱 설치';
+  button.addEventListener('click',async()=>{if(!installPrompt)return;installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;button.remove()});
+  actions.prepend(button);
+});
+window.addEventListener('appinstalled',()=>{document.querySelector('[data-install-app]')?.remove();installPrompt=null});
