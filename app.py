@@ -1,7 +1,7 @@
 import os, calendar, io, secrets, json, hashlib, urllib.request
 from datetime import datetime, date, timedelta
 from functools import wraps
-from flask import Flask, render_template, request, redirect, url_for, session, flash, abort, jsonify, send_file, has_request_context
+from flask import Flask, render_template, request, redirect, url_for, session, flash, abort, jsonify, send_file, send_from_directory, has_request_context
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import or_, text, event
 from sqlalchemy.orm import Session as OrmSession, with_loader_criteria
@@ -30,6 +30,13 @@ def security_headers(response):
  response.headers.setdefault('X-Content-Type-Options','nosniff');response.headers.setdefault('X-Frame-Options','DENY')
  response.headers.setdefault('Referrer-Policy','strict-origin-when-cross-origin');response.headers.setdefault('Permissions-Policy','camera=(), microphone=(), geolocation=()')
  if request.is_secure:response.headers.setdefault('Strict-Transport-Security','max-age=31536000; includeSubDomains')
+ return response
+
+@app.route('/sw.js')
+def service_worker():
+ response=send_from_directory(app.static_folder,'sw.js',mimetype='application/javascript')
+ response.headers['Cache-Control']='no-cache'
+ response.headers['Service-Worker-Allowed']='/'
  return response
 
 LOGIN_STORIES=[
