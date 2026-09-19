@@ -496,4 +496,19 @@ class SignatureAndTenantTest(unittest.TestCase):
   with app.app_context():self.assertEqual('보유중',Inventory.query.filter_by(serial_number='SERIAL-B').one().status)
 
 
+ def test_pwa_shell_is_installable_without_caching_business_data(self):
+  manifest=self.client.get('/static/manifest.webmanifest')
+  self.assertEqual(200,manifest.status_code)
+  self.assertEqual('standalone',manifest.get_json()['display'])
+  worker=self.client.get('/sw.js')
+  self.assertEqual(200,worker.status_code)
+  body=worker.get_data(as_text=True)
+  self.assertIn('/static/offline.html',body)
+  self.assertNotIn('/customers',body)
+  self.assertNotIn('/sales',body)
+  self.login_as_a()
+  page=self.client.get('/').get_data(as_text=True)
+  self.assertIn('manifest.webmanifest',page)
+
+
 if __name__=='__main__':unittest.main()
