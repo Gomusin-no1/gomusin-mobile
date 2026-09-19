@@ -1,4 +1,4 @@
-{% extends 'base.html' %}{% block title %}월별 실적보고서 · TrustFlow{% endblock %}{% block page_title %}월별 실적보고서{% endblock %}
+{% extends 'base.html' %}{% block title %}월별 실적보고서 · TrustMap{% endblock %}{% block page_title %}월별 실적보고서{% endblock %}
 {% block top_actions %}<a class="btn primary" href="{{url_for('sales_performance_export',month=month,branch_id=branch_id or '')}}">엑셀 다운로드</a>{% endblock %}
 {% block content %}
 <section class="panel"><form class="filter-bar" method="get"><label>실적월<input type="month" name="month" value="{{month}}"></label>{% if current_role=='admin' %}<label>매장<select name="branch_id"><option value="">전체 매장</option>{% for b in branches %}<option value="{{b.id}}" {% if branch_id==b.id %}selected{% endif %}>{{b.name}}</option>{% endfor %}</select></label>{% endif %}<button class="btn primary">조회</button></form></section>

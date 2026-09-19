@@ -1,6 +1,6 @@
 
 {% extends "base.html" %}
-{% block title %}거래처 단가표 · TrustFlow{% endblock %}{% block page_title %}거래처 단가표{% endblock %}
+{% block title %}거래처 단가표 · TrustMap{% endblock %}{% block page_title %}거래처 단가표{% endblock %}
 {% block content %}
 <div class="page-grid"><section class="panel"><div class="panel-title"><div><h2>엑셀 자동 등록</h2><span>첫 행의 열 이름을 인식해 신규 단가는 추가하고 기존 단가는 갱신합니다.</span></div></div><form method="post" action="{{url_for('price_import')}}" enctype="multipart/form-data" class="formgrid"><label class="span-2">단가표 파일<input type="file" name="file" accept=".xlsx,.xlsm" required><small>필수 열: 기종(모델명), 통신사, 가입유형, 가격(단가)</small></label><div class="span-2 action-row"><button class="btn primary">엑셀 단가표 반영</button></div></form></section>
 <section class="panel"><div class="panel-title"><div><h2>단가 직접 등록</h2><span>같은 기종·통신사·가입유형은 최신 가격으로 수정됩니다.</span></div></div><form method="post" class="formgrid"><label>기종<input name="device" placeholder="예: 갤럭시 S26 256GB" required></label><label>통신사<select name="carrier"><option>SKT</option><option>KT</option><option>LG U+</option></select></label><label>가입유형<select name="sale_type"><option>번호이동</option><option>기기변경</option><option>신규가입</option></select></label><label>가격/조건<input name="price" placeholder="예: 150,000원 / 109요금제" required></label><div class="span-2 action-row"><button class="btn">단가 등록</button></div></form></section></div>
