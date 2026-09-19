@@ -1284,6 +1284,81 @@ def customers_export():
  audit('고객목록 다운로드','customer','',f'{len(rows)}명 · 유형 {customer_type or "전체"}');db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
  return send_file(out,as_attachment=True,download_name=f'TrustFlow_고객목록_{date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
+CUSTOMER_HEADER_ALIASES={
+ 'name':{'고객명','이름','성명','name','customer'},'phone':{'휴대전화','휴대폰','전화번호','연락처','핸드폰','phone','mobile'},
+ 'customer_type':{'고객유형','유형','구분','customertype','type'},'carrier':{'통신사','carrier','telecom'},
+ 'address_road':{'도로명주소','신주소','roadaddress'},'address_jibun':{'구주소','지번주소','address'},'address_detail':{'상세주소','동호수','detailaddress'},
+ 'hobbies':{'취미','hobby','hobbies'},'interests':{'관심사','관심분야','interest','interests'},'memo':{'메모','비고','memo','note'},
+ 'marketing_consent':{'문자수신동의','마케팅동의','수신동의','smsconsent','consent'},'branch':{'지점','매장','branch','store'}
+}
+
+def customer_header_positions(header):
+ aliases={key:{normalize_excel_header(x) for x in values} for key,values in CUSTOMER_HEADER_ALIASES.items()};positions={}
+ for index,value in enumerate(header or []):
+  normalized=normalize_excel_header(value)
+  for key,candidates in aliases.items():
+   if normalized in candidates:positions.setdefault(key,index)
+ return positions
+
+def normalize_excel_phone(value):
+ if isinstance(value,float) and value.is_integer():value=int(value)
+ digits=normalize_phone(value)
+ if len(digits)==10 and digits.startswith('10'):digits='0'+digits
+ return digits
+
+@app.get('/customers/template.xlsx')
+@login_required
+@admin_required
+def customers_template():
+ from openpyxl import Workbook
+ from openpyxl.styles import Font,PatternFill
+ wb=Workbook();ws=wb.active;ws.title='고객 등록';headers=['고객명','휴대전화','고객유형','통신사','도로명주소','구주소','상세주소','취미','관심사','메모','문자수신동의','지점']
+ ws.append(headers);ws.append(['홍길동','01012345678','기존손님','SK','인천광역시 부평구 예시로 1','','101동 101호','낚시','인터넷 결합','','미동의','부평본점'])
+ for cell in ws[1]:cell.font=Font(bold=True,color='FFFFFF');cell.fill=PatternFill('solid',fgColor='14324A')
+ ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
+ for col,width in zip('ABCDEFGHIJKL',[16,16,13,10,34,34,22,20,24,30,15,16]):ws.column_dimensions[col].width=width
+ out=io.BytesIO();wb.save(out);out.seek(0);audit('고객 업로드양식 다운로드','customer','template','고객 일괄등록 엑셀 양식',commit=True)
+ return send_file(out,as_attachment=True,download_name='TrustFlow_고객일괄등록_양식.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+@app.post('/customers/import')
+@login_required
+@admin_required
+def customers_import():
+ upload=request.files.get('file');default_branch=request.form.get('branch_id')
+ if not upload or not upload.filename:flash('업로드할 고객 엑셀 파일을 선택해주세요.','error');return redirect(url_for('customers'))
+ if not upload.filename.lower().endswith(('.xlsx','.xlsm')):flash('xlsx 또는 xlsm 파일만 업로드할 수 있습니다.','error');return redirect(url_for('customers'))
+ branch=Branch.query.filter_by(id=default_branch,active=True).first() if default_branch else None
+ if default_branch and not branch:abort(403)
+ try:
+  from openpyxl import load_workbook
+  book=load_workbook(upload,read_only=True,data_only=True);created=duplicates=invalid=0;seen=set();recognized=False
+  branches={normalize_excel_header(x.name):x for x in Branch.query.filter_by(active=True).all()};existing={normalize_phone(x[0]) for x in db.session.query(Customer.phone).filter(Customer.phone.isnot(None)).all() if x[0]}
+  consent_values={'동의','예','yes','y','true','1','수신동의','o'};allowed_types={'로드손님','성지손님','기존손님'}
+  for sheet in book.worksheets:
+   rows=sheet.iter_rows(values_only=True);header=next(rows,None);positions=customer_header_positions(header)
+   if not {'name','phone'}.issubset(positions):continue
+   recognized=True
+   for row in rows:
+    def value(key):
+     index=positions.get(key);return row[index] if index is not None and index<len(row) else None
+    name=str(value('name') or '').strip();phone=normalize_excel_phone(value('phone'))
+    if not name or len(phone)<10:invalid+=1;continue
+    if phone in existing or phone in seen:duplicates+=1;continue
+    row_branch=branches.get(normalize_excel_header(value('branch'))) if value('branch') else branch
+    if not row_branch:row_branch=branch
+    if not row_branch:invalid+=1;continue
+    customer_type=str(value('customer_type') or '기존손님').strip();customer_type=customer_type if customer_type in allowed_types else '기존손님'
+    carrier=str(value('carrier') or '').strip().upper().replace('SKT','SK').replace('LGU+','LG').replace('LG U+','LG');carrier=carrier if carrier in {'SK','KT','LG'} else ''
+    road=str(value('address_road') or '').strip();jibun=str(value('address_jibun') or '').strip();detail=str(value('address_detail') or '').strip();address_key='|'.join([road,jibun,detail]).lower().replace(' ','') if road or jibun else ''
+    consent=normalize_excel_header(value('marketing_consent')) in {normalize_excel_header(x) for x in consent_values}
+    db.session.add(Customer(name=name,phone=phone,carrier=carrier,status='상담중',customer_type=customer_type,address_road=road,address_jibun=jibun,address_detail=detail,address_key=address_key,hobbies=str(value('hobbies') or '').strip(),interests=str(value('interests') or '').strip(),memo=str(value('memo') or '').strip(),branch_id=row_branch.id,company_code=current_company(),marketing_consent=consent,marketing_consent_at=datetime.utcnow() if consent else None));seen.add(phone);created+=1
+  if not recognized:raise ValueError('required headers missing')
+  if not created:db.session.rollback();flash(f'등록된 고객이 없습니다. 중복 {duplicates}건, 오류·지점미지정 {invalid}건','error');return redirect(url_for('customers'))
+  audit('고객 엑셀 일괄등록','customer','',f'{secure_filename(upload.filename)} / 등록 {created}명 / 중복 {duplicates}명 / 제외 {invalid}명');db.session.commit();flash(f'고객 등록 완료: 신규 {created}명, 중복 {duplicates}명, 제외 {invalid}명','success')
+ except Exception:
+  db.session.rollback();flash('고객 엑셀을 읽지 못했습니다. 고객명·휴대전화 열과 지점을 확인해주세요.','error')
+ return redirect(url_for('customers'))
+
 @app.route('/customers/<int:cid>')
 @login_required
 def customer_detail(cid):
