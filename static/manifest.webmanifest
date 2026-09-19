@@ -1,0 +1,12 @@
+{
+  "name": "TrustFlow 매장업무",
+  "short_name": "TrustFlow",
+  "description": "매장 고객·판매·실적을 안전하게 관리하는 통합 업무 앱",
+  "lang": "ko-KR",
+  "start_url": "/login?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f9fc",
+  "theme_color": "#173b62",
+  "icons": [{"src":"/static/images/trustflow-app-icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
+}
