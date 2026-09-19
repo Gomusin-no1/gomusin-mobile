@@ -1,4 +1,4 @@
-import os, calendar, io, secrets, json, hashlib, urllib.request
+import os, calendar, io, secrets, json, hashlib, urllib.request, zipfile
 from datetime import datetime, date, timedelta
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, flash, abort, jsonify, send_file, send_from_directory, has_request_context
@@ -407,6 +407,9 @@ def current_branch_id():
 def current_company():
  return (session.get('company_code') or 'trustflow').strip().lower()
 
+def latest_backup_log():
+ return AuditLog.query.filter(AuditLog.company_code==current_company(),AuditLog.action.in_(['관리자 전체백업 다운로드','관리자 전체보관백업 다운로드'])).order_by(AuditLog.created_at.desc()).first()
+
 @event.listens_for(OrmSession,'do_orm_execute')
 def tenant_read_filter(execute_state):
  if execute_state.execution_options.get('skip_tenant') or not execute_state.is_select or not has_request_context() or not session.get('user_id'):return
@@ -508,7 +511,7 @@ def notification_summary():
  account_requests=AccountRequest.query.filter_by(company_code=current_company(),status='대기').count() if is_admin() else 0
  download_alerts=AuditLog.query.filter(AuditLog.action.ilike('%다운로드%'),AuditLog.created_at>=datetime.utcnow()-timedelta(days=7)).count() if is_admin() else 0
  overdue_settlements=overdue_settlement_query(today).count()
- last_backup=AuditLog.query.filter_by(company_code=current_company(),action='관리자 전체백업 다운로드').order_by(AuditLog.created_at.desc()).first() if is_admin() else None
+ last_backup=latest_backup_log() if is_admin() else None
  backup_due=1 if is_admin() and (not last_backup or last_backup.created_at<datetime.utcnow()-timedelta(days=7)) else 0
  expiry=parse_date(os.environ.get('DATABASE_EXPIRES_AT')) if is_admin() else None
  database_expiry_due=1 if expiry and expiry<=today+timedelta(days=30) else 0
@@ -1162,7 +1165,7 @@ def notifications():
  account_requests=AccountRequest.query.filter_by(company_code=current_company(),status='대기').order_by(AccountRequest.created_at.asc()).limit(100).all() if is_admin() else []
  download_alerts=AuditLog.query.filter(AuditLog.action.ilike('%다운로드%'),AuditLog.created_at>=datetime.utcnow()-timedelta(days=7)).order_by(AuditLog.created_at.desc()).limit(100).all() if is_admin() else []
  overdue_settlements=overdue_settlement_query(today).order_by(Sale.opening_date.asc()).limit(100).all()
- last_backup=AuditLog.query.filter_by(company_code=current_company(),action='관리자 전체백업 다운로드').order_by(AuditLog.created_at.desc()).first() if is_admin() else None
+ last_backup=latest_backup_log() if is_admin() else None
  backup_due=is_admin() and (not last_backup or last_backup.created_at<datetime.utcnow()-timedelta(days=7))
  database_expiry=parse_date(os.environ.get('DATABASE_EXPIRES_AT')) if is_admin() else None
  database_days_left=(database_expiry-today).days if database_expiry else None
@@ -2340,7 +2343,7 @@ def audit_logs():
 @admin_required
 def admin_readiness():
  prepare_database();company=current_company()
- last_backup=AuditLog.query.filter_by(company_code=company,action='관리자 전체백업 다운로드').order_by(AuditLog.created_at.desc()).first()
+ last_backup=latest_backup_log()
  backup_age=(datetime.utcnow()-last_backup.created_at).days if last_backup else None
  database_expiry=parse_date(os.environ.get('DATABASE_EXPIRES_AT'));database_days_left=(database_expiry-date.today()).days if database_expiry else None
  checks=[
@@ -2380,3 +2383,73 @@ def admin_backup():
  sheet('직원계정',['ID','개인아이디','표시이름','권한','지점','활성상태','페이백승인','등록일'],[(x.id,x.username,x.display_name,x.role,branch_names.get(x.branch_id),x.active,x.can_approve_payback,x.created_at) for x in User.query.order_by(User.id).all()])
  audit('관리자 전체백업 다운로드','system','backup',f'{date.today()} 운영데이터 11개 시트');db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
  return send_file(out,as_attachment=True,download_name=f'TrustFlow_운영백업_{date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+@app.get('/admin/backup.zip')
+@login_required
+@admin_required
+def admin_archive_backup():
+ """Create a complete, self-verifying company archive including uploaded documents."""
+ prepare_database();company=current_company();branches=Branch.query.order_by(Branch.id).all();branch_ids=[x.id for x in branches]
+ sales=apply_branch_scope(Sale.query,Sale).order_by(Sale.id).all();sale_ids=[x.id for x in sales]
+ inventory=apply_branch_scope(Inventory.query,Inventory).order_by(Inventory.id).all();inventory_ids=[x.id for x in inventory]
+ campaigns=SmsCampaign.query.order_by(SmsCampaign.id).all();campaign_ids=[x.id for x in campaigns]
+ partner_ids={x.partner_id for x in sales+inventory if x.partner_id}
+ datasets={
+  'branches':branches,
+  'users':User.query.order_by(User.id).all(),
+  'customers':Customer.query.order_by(Customer.id).all(),
+  'bookings':Booking.query.order_by(Booking.id).all(),
+  'prices':Price.query.order_by(Price.id).all(),
+  'monthly_targets':BranchMonthlyTarget.query.order_by(BranchMonthlyTarget.id).all(),
+  'partners':Partner.query.filter(Partner.id.in_(partner_ids or {0})).order_by(Partner.id).all(),
+  'inventory':inventory,
+  'inventory_movements':InventoryMovement.query.filter(InventoryMovement.inventory_id.in_(inventory_ids or [0])).order_by(InventoryMovement.id).all(),
+  'sales':sales,
+  'sale_addons':SaleAddon.query.filter(SaleAddon.sale_id.in_(sale_ids or [0])).order_by(SaleAddon.id).all(),
+  'sale_documents':SaleDocument.query.filter(SaleDocument.sale_id.in_(sale_ids or [0])).order_by(SaleDocument.id).all(),
+  'customer_tasks':task_query_scoped().order_by(CustomerTask.id).all(),
+  'paybacks':payback_query_scoped().order_by(Payback.id).all(),
+  'wired_sales':apply_branch_scope(WiredSale.query,WiredSale).order_by(WiredSale.id).all(),
+  'cash_ledger':apply_branch_scope(CashLedger.query,CashLedger).order_by(CashLedger.id).all(),
+  'contact_logs':apply_branch_scope(ContactLog.query,ContactLog).order_by(ContactLog.id).all(),
+  'legal_cases':apply_branch_scope(LegalCase.query,LegalCase).order_by(LegalCase.id).all(),
+  'card_terminals':CardTerminal.query.filter(CardTerminal.branch_id.in_(branch_ids or [0])).order_by(CardTerminal.id).all(),
+  'card_transactions':CardTransaction.query.filter(CardTransaction.branch_id.in_(branch_ids or [0])).order_by(CardTransaction.id).all(),
+  'sms_campaigns':campaigns,
+  'sms_recipients':SmsCampaignRecipient.query.filter(SmsCampaignRecipient.campaign_id.in_(campaign_ids or [0])).order_by(SmsCampaignRecipient.id).all(),
+  'audit_logs':AuditLog.query.order_by(AuditLog.id).all(),
+  'plan_master':PlanMaster.query.order_by(PlanMaster.id).all(),
+  'wired_product_master':WiredProductMaster.query.order_by(WiredProductMaster.id).all(),
+  'device_master':DeviceMaster.query.order_by(DeviceMaster.id).all(),
+ }
+ def json_value(value):
+  if isinstance(value,(datetime,date)):return value.isoformat()
+  if isinstance(value,bytes):return None
+  return value
+ def model_rows(items):
+  rows=[]
+  for item in items:
+   rows.append({column.name:json_value(getattr(item,column.name)) for column in item.__table__.columns if column.name!='file_data'})
+  return rows
+ archive=io.BytesIO();manifest={'format':'trustflow-complete-backup','version':1,'company_code':company,'created_at':datetime.utcnow().isoformat()+'Z','tables':{},'files':{}}
+ with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as bundle:
+  for name,items in datasets.items():
+   payload=json.dumps(model_rows(items),ensure_ascii=False,indent=2).encode('utf-8');path=f'data/{name}.json'
+   bundle.writestr(path,payload);manifest['tables'][name]={'rows':len(items),'sha256':hashlib.sha256(payload).hexdigest()};manifest['files'][path]=manifest['tables'][name]['sha256']
+  for document in datasets['sale_documents']:
+   filename=secure_filename(document.original_name) or f'document-{document.id}'
+   path=f'documents/{document.sale_id}/{document.id}-{filename}';payload=bytes(document.file_data or b'')
+   bundle.writestr(path,payload);manifest['files'][path]=hashlib.sha256(payload).hexdigest()
+  guide=('TrustFlow complete backup\n\nThis archive contains company data as UTF-8 JSON and original uploaded sales documents.\n'
+         'manifest.json records row counts and SHA-256 checksums. Keep this file in a secure location.\n').encode('utf-8')
+  bundle.writestr('README.txt',guide);manifest['files']['README.txt']=hashlib.sha256(guide).hexdigest()
+  bundle.writestr('manifest.json',json.dumps(manifest,ensure_ascii=False,indent=2).encode('utf-8'))
+ archive.seek(0)
+ with zipfile.ZipFile(archive,'r') as verification:
+  if verification.testzip():abort(500)
+  saved=json.loads(verification.read('manifest.json'))
+  for path,digest in saved['files'].items():
+   if hashlib.sha256(verification.read(path)).hexdigest()!=digest:abort(500)
+ archive.seek(0);size=archive.getbuffer().nbytes
+ audit('관리자 전체보관백업 다운로드','system','backup',f'{date.today()} · {len(datasets)}개 데이터묶음 · 서류 {len(datasets["sale_documents"])}개 · {size} bytes · 무결성검증 완료');db.session.commit()
+ return send_file(archive,as_attachment=True,download_name=f'TrustFlow_전체보관백업_{date.today()}.zip',mimetype='application/zip')
