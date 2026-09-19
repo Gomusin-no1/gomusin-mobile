@@ -1,9 +1,11 @@
 import os
 import io
 import json
+import hashlib
 import re
 import sys
 import unittest
+import zipfile
 from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -13,7 +15,7 @@ os.environ['ADMIN_USERNAME']=''
 os.environ['ADMIN_PASSWORD']=''
 
 from werkzeug.security import generate_password_hash, check_password_hash
-from app import app, db, User, Branch, BranchMonthlyTarget, Customer, CustomerTask, ContactLog, Booking, Inventory, InventoryMovement, DeviceMaster, Sale, SaleAddon, WiredSale, CashLedger, AccountRequest, AuditLog, Price, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months, addon_rule_for_carrier, resolved_addon_rule, task_due_stage
+from app import app, db, User, Branch, BranchMonthlyTarget, Customer, CustomerTask, ContactLog, Booking, Inventory, InventoryMovement, DeviceMaster, Sale, SaleAddon, SaleDocument, WiredSale, CashLedger, AccountRequest, AuditLog, Price, LOGIN_STORIES, PhoneVerification, SmsCampaign, SmsCampaignRecipient, _send_sms, issue_phone_code, run_sms_campaigns, add_months, addon_rule_for_carrier, resolved_addon_rule, task_due_stage
 
 
 class SignatureAndTenantTest(unittest.TestCase):
@@ -321,6 +323,20 @@ class SignatureAndTenantTest(unittest.TestCase):
   sales=' '.join(str(cell or '') for row in book['판매일보'].iter_rows(values_only=True) for cell in row);stock=' '.join(str(cell or '') for row in book['재고'].iter_rows(values_only=True) for cell in row);bookings=' '.join(str(cell or '') for row in book['방문예약'].iter_rows(values_only=True) for cell in row)
   self.assertEqual(11,len(book.sheetnames));self.assertIn('A 백업고객',sales);self.assertNotIn('B 백업비공개',sales);self.assertIn('A-BACKUP',stock);self.assertNotIn('B-BACKUP',stock);self.assertIn('A 예약백업',bookings);self.assertNotIn('B 예약비공개',bookings)
 
+ def test_complete_archive_contains_documents_and_verified_manifest(self):
+  with app.app_context():
+   sale=Sale(customer_name='A 전체백업고객',opening_date=date.today(),branch_id=self.a_branch);other=Sale(customer_name='B 전체백업비공개',opening_date=date.today(),branch_id=self.b_branch)
+   db.session.add_all([sale,other]);db.session.flush();db.session.add_all([SaleDocument(sale_id=sale.id,branch_id=self.a_branch,original_name='계약서.pdf',content_type='application/pdf',file_size=8,file_data=b'%PDF-safe',uploaded_by='A관리자'),SaleDocument(sale_id=other.id,branch_id=self.b_branch,original_name='비공개.pdf',content_type='application/pdf',file_size=6,file_data=b'secret',uploaded_by='B관리자')]);db.session.commit()
+  self.login_as_a();response=self.client.get('/admin/backup.zip')
+  self.assertEqual(200,response.status_code);self.assertEqual('application/zip',response.mimetype)
+  with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+   self.assertIsNone(archive.testzip());manifest=json.loads(archive.read('manifest.json'));sales=json.loads(archive.read('data/sales.json'))
+   self.assertEqual('trustflow-complete-backup',manifest['format']);self.assertEqual('company-a',manifest['company_code'])
+   self.assertIn('A 전체백업고객',{row['customer_name'] for row in sales});self.assertNotIn('B 전체백업비공개',{row['customer_name'] for row in sales})
+   document_paths=[name for name in archive.namelist() if name.startswith('documents/')]
+   self.assertEqual(1,len(document_paths));self.assertEqual(b'%PDF-safe',archive.read(document_paths[0]))
+   for path,digest in manifest['files'].items():self.assertEqual(hashlib.sha256(archive.read(path)).hexdigest(),digest)
+
  def test_direct_cross_company_customer_access_is_blocked(self):
   self.login_as_a();response=self.client.get(f'/customers/{self.b_customer}')
   self.assertEqual(404,response.status_code)
@@ -516,7 +532,7 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.assertEqual(200,response.status_code)
   body=response.get_data(as_text=True)
   self.assertIn('운영 준비 점검',body)
-  self.assertIn('전체 백업 받기',body)
+  self.assertIn('전체 보관백업',body)
   with app.app_context():
    user=db.session.get(User,self.a_user);user.role='staff';db.session.commit()
   self.assertEqual(403,self.client.get('/admin/readiness').status_code)
@@ -533,7 +549,7 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.login_as_a();response=self.client.get('/notifications')
   body=response.get_data(as_text=True)
   self.assertIn('운영 데이터 보호 확인이 필요합니다.',body)
-  self.assertIn('전체 백업 받기',body)
+  self.assertIn('전체 보관백업',body)
   with app.app_context():
    db.session.add(AuditLog(company_code='company-a',username='A관리자',action='관리자 전체백업 다운로드',created_at=datetime.utcnow()));db.session.commit()
   body=self.client.get('/notifications').get_data(as_text=True)
