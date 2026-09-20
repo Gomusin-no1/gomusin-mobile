@@ -1965,7 +1965,8 @@ def sale_settlement_status(sid):
 def sale_documents(sid):
  sale=Sale.query.get_or_404(sid); enforce_branch(sale.branch_id)
  if request.method=='POST':
-  f=request.files.get('file')
+  if not session.get('document_csrf') or not secrets.compare_digest(session['document_csrf'],request.form.get('document_csrf','')): abort(403)
+  f=next((item for item in request.files.getlist('file') if item.filename),None)
   if not f or not f.filename:
    flash('저장할 서류 파일을 선택해주세요.','error'); return redirect(url_for('sale_documents',sid=sid))
   name=secure_filename(f.filename) or 'document'
@@ -1973,25 +1974,35 @@ def sale_documents(sid):
   allowed={'application/pdf','image/jpeg','image/png','image/webp'}
   if content_type not in allowed:
    flash('PDF, JPG, PNG, WEBP 파일만 저장할 수 있습니다.','error'); return redirect(url_for('sale_documents',sid=sid))
-  data=f.read()
+  data=f.read(10*1024*1024+1)
   if len(data)>10*1024*1024:
    flash('서류 1개는 10MB 이하만 저장할 수 있습니다.','error'); return redirect(url_for('sale_documents',sid=sid))
-  db.session.add(SaleDocument(sale_id=sale.id,branch_id=sale.branch_id,doc_type=request.form.get('doc_type','기타서류'),original_name=name,content_type=content_type,file_size=len(data),file_data=data,uploaded_by=session.get('display_name') or session.get('username')))
+  valid_signature=(content_type=='application/pdf' and data.startswith(b'%PDF-')) or (content_type=='image/jpeg' and data.startswith(b'\xff\xd8\xff')) or (content_type=='image/png' and data.startswith(b'\x89PNG\r\n\x1a\n')) or (content_type=='image/webp' and data.startswith(b'RIFF') and data[8:12]==b'WEBP')
+  if not valid_signature:
+   flash('파일 형식을 확인할 수 없습니다. 원본 PDF 또는 사진 파일을 선택해주세요.','error'); return redirect(url_for('sale_documents',sid=sid))
+  doc_type=request.form.get('doc_type','기타서류')
+  if doc_type not in {'가입신청서','계약서','신분확인서류','고객동의서','기타서류'}: doc_type='기타서류'
+  db.session.add(SaleDocument(sale_id=sale.id,branch_id=sale.branch_id,doc_type=doc_type,original_name=name,content_type=content_type,file_size=len(data),file_data=data,uploaded_by=session.get('display_name') or session.get('username')))
+  audit('고객서류 등록','sale',sale.id,doc_type,sale.branch_id)
   db.session.commit(); flash('고객 서류가 안전하게 저장되었습니다.','success'); return redirect(url_for('sale_documents',sid=sid))
  docs=SaleDocument.query.filter_by(sale_id=sale.id).order_by(SaleDocument.created_at.desc()).all()
- return render_template('sale_documents.html',sale=sale,docs=docs)
+ session.setdefault('document_csrf',secrets.token_urlsafe(32))
+ response=app.make_response(render_template('sale_documents.html',sale=sale,docs=docs));response.headers['Cache-Control']='private, no-store';return response
 
 @app.get('/documents/<int:did>/view')
 @login_required
 def document_view(did):
  d=SaleDocument.query.get_or_404(did); sale=Sale.query.get_or_404(d.sale_id); enforce_branch(sale.branch_id)
  audit('고객서류 열람','sale_document',d.id,f'{sale.customer_name} · {d.doc_type} · {d.original_name}',sale.branch_id);db.session.commit()
- return send_file(io.BytesIO(d.file_data),mimetype=d.content_type,download_name=d.original_name,as_attachment=False)
+ response=send_file(io.BytesIO(d.file_data),mimetype=d.content_type,download_name=d.original_name,as_attachment=False)
+ response.headers['Cache-Control']='private, no-store';response.headers['X-Content-Type-Options']='nosniff';return response
 
 @app.post('/documents/<int:did>/delete')
 @login_required
 def document_delete(did):
  d=SaleDocument.query.get_or_404(did); sale=Sale.query.get_or_404(d.sale_id); enforce_branch(sale.branch_id)
+ if not session.get('document_csrf') or not secrets.compare_digest(session['document_csrf'],request.form.get('document_csrf','')): abort(403)
+ audit('고객서류 삭제','sale_document',d.id,d.doc_type,sale.branch_id)
  db.session.delete(d); db.session.commit(); flash('서류가 삭제되었습니다.','success'); return redirect(url_for('sale_documents',sid=sale.id))
 
 @app.post('/sales/<int:sid>/delete')

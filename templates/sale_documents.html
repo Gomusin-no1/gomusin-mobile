@@ -1,3 +1,21 @@
-{% extends 'base.html' %}{% block page_title %}고객서류 · {{sale.customer_name}}{% endblock %}{% block content %}
-<div class="two-col"><section class="panel"><h2>서류 스캔/파일 저장</h2><p class="muted">PDF/JPG/PNG/WEBP · 파일당 최대 10MB · PostgreSQL에 비공개 저장</p><form method="post" enctype="multipart/form-data" class="stack"><label>서류종류<select name="doc_type"><option>가입신청서</option><option>계약서</option><option>신분확인서류</option><option>고객동의서</option><option>기타서류</option></select></label><label>파일<input type="file" name="file" accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/*" required></label><button class="btn primary">서류 저장</button></form></section>
-<section class="panel"><div class="panel-title"><div><h2>{{sale.customer_name}}</h2><span>{{sale.opening_date}} · {{sale.device or '-'}} · {{sale.assigned_staff or '-'}}</span></div></div><div class="task-list compact">{% for d in docs %}<div class="task-card"><div><span class="tag">{{d.doc_type}}</span><b>{{d.original_name}}</b><small>{{(d.file_size/1024)|round|int}}KB · {{d.uploaded_by or '-'}} · {{d.created_at.strftime('%Y-%m-%d %H:%M')}}</small></div><div class="action-row"><a class="btn small" target="_blank" href="{{url_for('document_view',did=d.id)}}">열람</a><form method="post" action="{{url_for('document_delete',did=d.id)}}" onsubmit="return confirm('이 서류를 삭제할까요?')"><button class="text-link danger-link">삭제</button></form></div></div>{% else %}<div class="empty">저장된 서류가 없습니다.</div>{% endfor %}</div><div class="action-row"><a class="btn" href="{{url_for('sales')}}">판매일보</a><a class="btn" href="{{url_for('sale_edit',sid=sale.id)}}">판매건 수정</a></div></section></div>{% endblock %}
+{% extends 'base.html' %}
+{% block page_title %}고객서류 · {{sale.customer_name}}{% endblock %}
+{% block head %}<script defer src="{{url_for('static',filename='js/document-capture.js')}}"></script>{% endblock %}
+{% block content %}
+<div class="two-col">
+<section class="panel"><h2>고객 서류 촬영 · 스캔 등록</h2>
+<p class="muted">휴대폰으로 촬영하거나 스캐너에서 저장한 파일을 올려주세요. PDF · JPG · PNG · WEBP, 파일당 최대 10MB.</p>
+<form method="post" enctype="multipart/form-data" class="stack" id="document-capture-form">
+<input type="hidden" name="document_csrf" value="{{session.document_csrf}}">
+<label>서류 종류<select name="doc_type"><option>가입신청서</option><option>계약서</option><option>신분확인서류</option><option>고객동의서</option><option>기타서류</option></select></label>
+<label>휴대폰 카메라로 촬영<input id="document-camera" type="file" name="file" accept="image/jpeg,image/png,image/webp" capture="environment"></label>
+<label>스캔 파일 · 사진 선택<input id="document-file" type="file" name="file" accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"></label>
+<p class="muted">신분확인서류는 업무에 필요한 범위만 등록하고, 불필요한 개인정보는 가린 뒤 촬영해 주세요. 앞면·뒷면은 각각 저장할 수 있습니다.</p>
+<div id="document-preview" hidden><strong>저장 전 확인</strong><p id="document-file-info"></p><img id="document-image-preview" alt="저장할 고객 서류 미리보기" style="display:block;max-width:100%;max-height:420px;object-fit:contain" hidden><p id="document-pdf-info" hidden>PDF 파일이 선택되었습니다. 파일명과 크기를 확인해 주세요.</p><button class="btn" id="document-clear" type="button">선택 취소 · 다시 촬영</button></div>
+<p id="document-capture-message" role="status" aria-live="polite"></p>
+<button class="btn primary" id="document-save">이 고객에게 서류 저장</button>
+</form></section>
+<section class="panel"><div class="panel-title"><div><h2>{{sale.customer_name}}</h2><span>{{sale.opening_date}} · {{sale.device or '-'}} · {{sale.assigned_staff or '-'}}</span></div></div>
+<div class="task-list compact">{% for d in docs %}<div class="task-card"><div><span class="tag">{{d.doc_type}}</span><b>{{d.original_name}}</b><small>{{(d.file_size/1024)|round|int}}KB · {{d.uploaded_by or '-'}} · {{d.created_at.strftime('%Y-%m-%d %H:%M')}}</small></div><div class="action-row"><a class="btn small" target="_blank" rel="noopener" href="{{url_for('document_view',did=d.id)}}">열람</a><form method="post" action="{{url_for('document_delete',did=d.id)}}" onsubmit="return confirm('이 서류를 삭제할까요?')"><input type="hidden" name="document_csrf" value="{{session.document_csrf}}"><button class="text-link danger-link">삭제</button></form></div></div>{% else %}<div class="empty">저장된 서류가 없습니다.</div>{% endfor %}</div>
+<div class="action-row"><a class="btn" href="{{url_for('sales')}}">판매일보</a><a class="btn" href="{{url_for('sale_edit',sid=sale.id)}}">판매건 수정</a></div></section></div>
+{% endblock %}
