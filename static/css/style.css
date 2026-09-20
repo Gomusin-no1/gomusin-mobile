@@ -138,3 +138,20 @@ body{background:var(--tm-paper);color:var(--tm-ink)}
 @media(max-width:1100px){.trustmap-command{grid-template-columns:1fr}.store-map-visual{height:320px}.trustmap-hero{grid-template-columns:1fr 34%}.operation-route{padding-inline:16px}}
 @media(max-width:860px){.app-shell{grid-template-columns:1fr}.content{padding:0 14px 30px}.topbar{margin:0 -14px 14px;padding:8px 14px}.trustmap-hero,.operation-route{margin-inline:-14px}.trustmap-hero{grid-template-columns:1fr}.trustmap-hero>div{padding:26px 20px}.trustmap-hero aside{display:none}.trustmap-hero h2{font-size:29px}.operation-route{grid-template-columns:repeat(4,1fr);padding:10px 8px}.operation-route>span{display:none}.operation-route>a{grid-template-columns:1fr;text-align:center}.operation-route i{grid-row:auto;margin:0 auto 5px}.operation-route small{display:none}}
 @media(max-width:600px){.trustmap-command{display:block}.store-map-panel{margin-top:12px}.store-map-visual{height:245px}.priority-table>a{grid-template-columns:8px 38px minmax(0,1fr) 54px}.priority-table small{display:none}.operation-route b{font-size:11px}.map-node{min-width:50px;padding:5px;font-size:9px}.trustmap-hero h2{font-size:25px}.global-search{display:none}}
+.brand .trustmap-approved-logo{display:block;width:144px;max-width:100%;height:auto;object-fit:contain}
+.auth-header .trustmap-approved-auth{display:block;width:240px;max-width:100%;height:auto;margin:0 auto}
+.trust-seal .trustmap-approved-seal{display:block;width:110px;height:auto;background:#fff}
+/* Approved compass replaces the legacy TM pseudo-element. Effects are decorative. */
+.auth-header:before{content:none;background:none}
+.auth-header .trustmap-gold-logo{position:relative;isolation:isolate;width:280px;max-width:100%;margin:8px auto 16px;line-height:0;overflow:hidden}
+.auth-header .trustmap-gold-logo .trustmap-approved-auth{width:100%;filter:saturate(1.3) contrast(1.06)}
+.gold-shimmer,.gold-dust,.gold-glint{position:absolute;pointer-events:none}
+.gold-shimmer{inset:0;clip-path:polygon(49.7% 13.5%,56.1% 39.8%,49.7% 59.2%,43.4% 39.8%);background:linear-gradient(115deg,transparent 35%,rgba(255,232,155,.2) 43%,rgba(255,255,230,.95) 49%,rgba(255,218,112,.45) 54%,transparent 64%);background-size:350% 100%;mix-blend-mode:screen;animation:trustmap-gold-shine 6s ease-in-out infinite}
+.gold-dust{inset:0 0 30%;overflow:hidden}
+.gold-dust i{position:absolute;top:-8%;left:var(--x);width:2px;height:2px;border-radius:50%;background:#d9aa42;box-shadow:0 0 4px 1px rgba(218,170,62,.35);opacity:0;animation:trustmap-gold-fall var(--duration) linear var(--delay) infinite}
+.gold-dust i:nth-child(3n){width:3px;height:3px;background:#e8c56b}
+.gold-glint{left:49%;top:14%;width:12px;height:12px;background:linear-gradient(90deg,transparent 42%,#fff5c8 50%,transparent 58%),linear-gradient(transparent 42%,#eac66b 50%,transparent 58%);filter:drop-shadow(0 0 3px #dfb648);animation:trustmap-gold-glint 5s ease-in-out infinite}
+@keyframes trustmap-gold-shine{0%,20%{background-position:100% 0}65%,100%{background-position:0 0}}
+@keyframes trustmap-gold-fall{0%{transform:translateY(0);opacity:0}20%{opacity:.7}80%{opacity:.4}100%{transform:translate(12px,145px);opacity:0}}
+@keyframes trustmap-gold-glint{0%,65%,100%{opacity:.15;transform:scale(.65)}75%{opacity:1;transform:scale(1.2)}85%{opacity:.4;transform:scale(.8)}}
+@media(prefers-reduced-motion:reduce){.gold-shimmer,.gold-dust i,.gold-glint{animation:none}.gold-dust{display:none}.gold-glint{opacity:.45}}

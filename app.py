@@ -1128,6 +1128,7 @@ def dashboard():
  prepare_database(); today=date.today(); selected=parse_date(request.args.get('date')) or today
  start=date(today.year,today.month,1); end=add_months(start,1)
  tq=task_query_scoped()
+ dashboard_priority=task_query_scoped().filter(CustomerTask.due_date<=today,CustomerTask.status.in_(['처리예정','연락안됨','연기'])).order_by(CustomerTask.due_date.asc(),CustomerTask.id.asc()).all()
  tasks=tq.filter(CustomerTask.due_date==selected).order_by(CustomerTask.status.asc(),CustomerTask.id.desc()).all()
  overdue=task_query_scoped().filter(CustomerTask.due_date<today,CustomerTask.status.in_(['처리예정','연락안됨','연기'])).order_by(CustomerTask.due_date.asc()).limit(50).all()
  month_tasks=task_query_scoped().filter(CustomerTask.due_date>=start,CustomerTask.due_date<end).all()
@@ -1147,8 +1148,14 @@ def dashboard():
  performance_rows=[];performance_totals={}
  if is_admin():
   _,performance_rows,_,performance_totals=sales_performance_data(today.strftime('%Y-%m'))
+ # Dashboard figures use the same tenant/branch-scoped settlement basis as reports.
+ month_sales=sq.filter(Sale.opening_date>=start,Sale.opening_date<end).all()
+ weekly=[0]*5
+ for sale in month_sales:
+  weekly[min((sale.opening_date.day-1)//7,4)]+=sale.settlement_amount_v2 or money(sale.settlement)
+ dashboard_summary={'weekly':weekly,'weekly_max':max(weekly+[1]),'monthly':sum(weekly),'daily':sum(s.settlement_amount_v2 or money(s.settlement) for s in today_sale_items),'visits':booking_q.filter(Booking.visit_date.like(f'{today.isoformat()}%'),Booking.status=='방문완료').count(),'stock':apply_branch_scope(Inventory.query,Inventory).filter(Inventory.status=='보유중').count()}
  cal=calendar.Calendar(firstweekday=6); weeks=cal.monthdayscalendar(today.year,today.month)
- return render_template('dashboard.html',today=today,selected=selected,tasks=tasks,overdue=overdue,overdue_settlements=overdue_settlements,counts=counts,weeks=weeks,year=today.year,month=today.month,today_sales=len(today_sale_items),today_sale_items=today_sale_items,pending_paybacks=pending_paybacks,today_paybacks=today_paybacks,sales_map=sales_map,branches=branches,task_due_stage=task_due_stage,selected_bookings=selected_bookings,today_bookings=today_bookings,performance_rows=performance_rows,performance_totals=performance_totals)
+ return render_template('dashboard.html',today=today,selected=selected,tasks=tasks,overdue=overdue,overdue_settlements=overdue_settlements,counts=counts,weeks=weeks,year=today.year,month=today.month,today_sales=len(today_sale_items),today_sale_items=today_sale_items,pending_paybacks=pending_paybacks,today_paybacks=today_paybacks,sales_map=sales_map,branches=branches,task_due_stage=task_due_stage,selected_bookings=selected_bookings,today_bookings=today_bookings,performance_rows=performance_rows,performance_totals=performance_totals,dashboard_summary=dashboard_summary,dashboard_priority=dashboard_priority)
 
 @app.get('/notifications')
 @login_required
@@ -1913,6 +1920,10 @@ def filtered_sales(args):
  elif month:
   try:start=datetime.strptime(month,'%Y-%m').date().replace(day=1);end=add_months(start,1);query=query.filter(Sale.opening_date>=start,Sale.opening_date<end)
   except:month=''
+ week=args.get('week','').strip()
+ if month and not day and week in ['1','2','3','4','5']:
+  week_start=start+timedelta(days=(int(week)-1)*7)
+  query=query.filter(Sale.opening_date>=week_start,Sale.opening_date<min(week_start+timedelta(days=7),end))
  if settlement_status:query=query.filter(Sale.settlement_status==settlement_status)
  if settlement_age=='overdue':query=query.filter(Sale.opening_date<=date.today()-timedelta(days=3),or_(Sale.settlement_status.is_(None),Sale.settlement_status!='정상'))
  if staff_name:query=query.filter(Sale.assigned_staff==staff_name)

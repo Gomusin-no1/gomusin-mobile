@@ -20,6 +20,18 @@ document.addEventListener('keydown',e=>{
 });
 
 // Keep the sidebar compact: only one work category is expanded at a time.
+// Reveal the dashboard details before anchor navigation scrolls to them.
+document.querySelectorAll('a[href="#operation-details"]').forEach(link=>{
+  link.addEventListener('click',()=>{
+    const details=document.getElementById('operation-details');
+    if(details)details.open=true;
+  });
+});
+if(location.hash==='#operation-details'){
+  const details=document.getElementById('operation-details');
+  if(details)details.open=true;
+}
+
 document.querySelectorAll('.unified-nav .nav-section').forEach(section=>{
   section.addEventListener('toggle',()=>{
     if(!section.open)return;
