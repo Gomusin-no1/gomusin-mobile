@@ -24,3 +24,5 @@ services:
         sync: false
       - key: DOCUMENT_ENCRYPTION_KEY
         sync: false
+      - key: NAS_SYNC_TOKEN
+        sync: false

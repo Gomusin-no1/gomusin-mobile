@@ -226,6 +226,8 @@ class SaleDocument(db.Model):
  file_sha256=db.Column(db.String(64))
  is_encrypted=db.Column(db.Boolean,default=False,nullable=False)
  sync_error=db.Column(db.String(500))
+ nas_mirrored_at=db.Column(db.DateTime,index=True)
+ nas_mirror_error=db.Column(db.String(500))
  uploaded_by=db.Column(db.String(50))
  created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False,index=True)
 
@@ -604,7 +606,7 @@ def seed_masters():
  db.session.commit()
 
 def prepare_database():
- db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); _add_columns('sale_document',{'storage_backend':"VARCHAR(20) DEFAULT 'database'",'storage_path':'VARCHAR(500)','file_sha256':'VARCHAR(64)','is_encrypted':'BOOLEAN DEFAULT FALSE','sync_error':'VARCHAR(500)'}); upgrade_existing_sale()
+ db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); _add_columns('sale_document',{'storage_backend':"VARCHAR(20) DEFAULT 'database'",'storage_path':'VARCHAR(500)','file_sha256':'VARCHAR(64)','is_encrypted':'BOOLEAN DEFAULT FALSE','sync_error':'VARCHAR(500)','nas_mirrored_at':'TIMESTAMP','nas_mirror_error':'VARCHAR(500)'}); upgrade_existing_sale()
  if db.engine.dialect.name=='postgresql':
   try:
    names={x.get('name') for x in db.inspect(db.engine).get_unique_constraints('user')}
@@ -1406,7 +1408,7 @@ def sale_documents(sid):
   try:
    nas_put(path,data,content_type)
   except StorageUnavailable as exc:
-   backend='database'; path=None; stored,encrypted=encrypt_fallback(data); sync_error=str(exc)[:500]
+   backend='database'; stored,encrypted=encrypt_fallback(data); sync_error=str(exc)[:500]
   doc=SaleDocument(sale_id=sale.id,branch_id=sale.branch_id,doc_type=request.form.get('doc_type','기타서류'),original_name=name,content_type=content_type,file_size=len(data),file_data=stored,storage_backend=backend,storage_path=path,file_sha256=digest,is_encrypted=encrypted,sync_error=sync_error,uploaded_by=session.get('display_name') or session.get('username'))
   db.session.add(doc); audit('고객서류 저장','sale_document',sale.id,f'{sale.customer_name} · {doc.doc_type} · {backend}',sale.branch_id)
   db.session.commit()
@@ -1414,6 +1416,43 @@ def sale_documents(sid):
   return redirect(url_for('sale_documents',sid=sid))
  docs=SaleDocument.query.filter_by(sale_id=sale.id).order_by(SaleDocument.created_at.desc()).all()
  return render_template('sale_documents.html',sale=sale,docs=docs)
+
+def _require_nas_sync_token():
+ expected=os.environ.get('NAS_SYNC_TOKEN','').strip()
+ supplied=request.headers.get('Authorization','')
+ if not expected or not supplied.startswith('Bearer ') or not secrets.compare_digest(supplied[7:],expected):
+  abort(401)
+
+@app.get('/api/nas-sync/pending')
+def nas_sync_pending():
+ _require_nas_sync_token()
+ docs=SaleDocument.query.filter(SaleDocument.storage_backend=='database',SaleDocument.nas_mirrored_at.is_(None)).order_by(SaleDocument.id).limit(100).all()
+ return jsonify({'documents':[{'id':d.id,'path':d.storage_path,'size':d.file_size,'sha256':d.file_sha256,'content_type':d.content_type} for d in docs]})
+
+@app.get('/api/nas-sync/documents/<int:did>')
+def nas_sync_download(did):
+ _require_nas_sync_token(); d=SaleDocument.query.get_or_404(did)
+ if d.storage_backend!='database':abort(404)
+ try:data=decrypt_fallback(d.file_data,d.is_encrypted)
+ except StorageUnavailable:abort(503)
+ if d.file_sha256 and sha256_hex(data)!=d.file_sha256:abort(500)
+ response=send_file(io.BytesIO(data),mimetype='application/octet-stream',download_name='document.bin',as_attachment=True)
+ response.headers['X-Document-SHA256']=d.file_sha256 or sha256_hex(data)
+ return response
+
+@app.post('/api/nas-sync/documents/<int:did>/ack')
+def nas_sync_ack(did):
+ _require_nas_sync_token(); d=SaleDocument.query.get_or_404(did)
+ payload=request.get_json(silent=True) or {}
+ if not secrets.compare_digest(str(payload.get('sha256','')),str(d.file_sha256 or '')):abort(409)
+ d.nas_mirrored_at=datetime.utcnow();d.nas_mirror_error=None;db.session.commit()
+ return jsonify({'ok':True,'mirrored_at':d.nas_mirrored_at.isoformat()+'Z'})
+
+@app.get('/api/nas-sync/health')
+def nas_sync_health():
+ _require_nas_sync_token()
+ pending=SaleDocument.query.filter(SaleDocument.storage_backend=='database',SaleDocument.nas_mirrored_at.is_(None)).count()
+ return jsonify({'ok':True,'pending':pending,'time':datetime.utcnow().isoformat()+'Z'})
 
 @app.get('/documents/<int:did>/view')
 @login_required
