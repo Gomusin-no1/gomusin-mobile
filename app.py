@@ -8,6 +8,9 @@ from sqlalchemy.orm import Session as OrmSession, with_loader_criteria
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
+from document_storage import (StorageUnavailable, build_object_path, decrypt_fallback,
+                              delete as nas_delete, encrypt_fallback, get as nas_get,
+                              put as nas_put, sha256_hex)
 
 load_dotenv()
 app=Flask(__name__)
@@ -218,6 +221,11 @@ class SaleDocument(db.Model):
  content_type=db.Column(db.String(100),nullable=False)
  file_size=db.Column(db.Integer,default=0)
  file_data=db.Column(db.LargeBinary,nullable=False)
+ storage_backend=db.Column(db.String(20),default='database',nullable=False)
+ storage_path=db.Column(db.String(500))
+ file_sha256=db.Column(db.String(64))
+ is_encrypted=db.Column(db.Boolean,default=False,nullable=False)
+ sync_error=db.Column(db.String(500))
  uploaded_by=db.Column(db.String(50))
  created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False,index=True)
 
@@ -596,7 +604,7 @@ def seed_masters():
  db.session.commit()
 
 def prepare_database():
- db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale()
+ db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); _add_columns('sale_document',{'storage_backend':"VARCHAR(20) DEFAULT 'database'",'storage_path':'VARCHAR(500)','file_sha256':'VARCHAR(64)','is_encrypted':'BOOLEAN DEFAULT FALSE','sync_error':'VARCHAR(500)'}); upgrade_existing_sale()
  if db.engine.dialect.name=='postgresql':
   try:
    names={x.get('name') for x in db.inspect(db.engine).get_unique_constraints('user')}
@@ -1393,8 +1401,17 @@ def sale_documents(sid):
   data=f.read()
   if len(data)>10*1024*1024:
    flash('서류 1개는 10MB 이하만 저장할 수 있습니다.','error'); return redirect(url_for('sale_documents',sid=sid))
-  db.session.add(SaleDocument(sale_id=sale.id,branch_id=sale.branch_id,doc_type=request.form.get('doc_type','기타서류'),original_name=name,content_type=content_type,file_size=len(data),file_data=data,uploaded_by=session.get('display_name') or session.get('username')))
-  db.session.commit(); flash('고객 서류가 안전하게 저장되었습니다.','success'); return redirect(url_for('sale_documents',sid=sid))
+  digest=sha256_hex(data); path=build_object_path(session.get('company_code'),sale.branch_id,sale.id,name)
+  backend='nas'; stored=b''; sync_error=None; encrypted=False
+  try:
+   nas_put(path,data,content_type)
+  except StorageUnavailable as exc:
+   backend='database'; path=None; stored,encrypted=encrypt_fallback(data); sync_error=str(exc)[:500]
+  doc=SaleDocument(sale_id=sale.id,branch_id=sale.branch_id,doc_type=request.form.get('doc_type','기타서류'),original_name=name,content_type=content_type,file_size=len(data),file_data=stored,storage_backend=backend,storage_path=path,file_sha256=digest,is_encrypted=encrypted,sync_error=sync_error,uploaded_by=session.get('display_name') or session.get('username'))
+  db.session.add(doc); audit('고객서류 저장','sale_document',sale.id,f'{sale.customer_name} · {doc.doc_type} · {backend}',sale.branch_id)
+  db.session.commit()
+  flash('고객 서류가 NAS에 안전하게 저장되었습니다.' if backend=='nas' else 'NAS 연결 지연으로 보안 예비 저장소에 저장했습니다. 연결 복구 후 동기화가 필요합니다.','success' if backend=='nas' else 'warning')
+  return redirect(url_for('sale_documents',sid=sid))
  docs=SaleDocument.query.filter_by(sale_id=sale.id).order_by(SaleDocument.created_at.desc()).all()
  return render_template('sale_documents.html',sale=sale,docs=docs)
 
@@ -1403,12 +1420,23 @@ def sale_documents(sid):
 def document_view(did):
  d=SaleDocument.query.get_or_404(did); sale=Sale.query.get_or_404(d.sale_id); enforce_branch(sale.branch_id)
  audit('고객서류 열람','sale_document',d.id,f'{sale.customer_name} · {d.doc_type} · {d.original_name}',sale.branch_id);db.session.commit()
- return send_file(io.BytesIO(d.file_data),mimetype=d.content_type,download_name=d.original_name,as_attachment=False)
+ try:
+  data=nas_get(d.storage_path) if d.storage_backend=='nas' and d.storage_path else decrypt_fallback(d.file_data,d.is_encrypted)
+ except StorageUnavailable:
+  abort(503,'서류 저장소에 일시적으로 연결할 수 없습니다.')
+ if d.file_sha256 and sha256_hex(data)!=d.file_sha256:
+  abort(500,'서류 무결성 검사에 실패했습니다.')
+ return send_file(io.BytesIO(data),mimetype=d.content_type,download_name=d.original_name,as_attachment=False)
 
 @app.post('/documents/<int:did>/delete')
 @login_required
 def document_delete(did):
  d=SaleDocument.query.get_or_404(did); sale=Sale.query.get_or_404(d.sale_id); enforce_branch(sale.branch_id)
+ if d.storage_backend=='nas' and d.storage_path:
+  try:nas_delete(d.storage_path)
+  except StorageUnavailable:
+   flash('NAS 파일 삭제에 실패하여 기록을 유지했습니다. 잠시 후 다시 시도해주세요.','error');return redirect(url_for('sale_documents',sid=sale.id))
+ audit('고객서류 삭제','sale_document',d.id,f'{sale.customer_name} · {d.doc_type} · {d.original_name}',sale.branch_id)
  db.session.delete(d); db.session.commit(); flash('서류가 삭제되었습니다.','success'); return redirect(url_for('sale_documents',sid=sale.id))
 
 @app.post('/sales/<int:sid>/delete')
@@ -1423,7 +1451,12 @@ def sale_delete(sid):
  CustomerTask.query.filter_by(sale_id=s.id).delete(synchronize_session=False)
  Payback.query.filter_by(sale_id=s.id).delete(synchronize_session=False)
  SaleAddon.query.filter_by(sale_id=s.id).delete(synchronize_session=False)
- SaleDocument.query.filter_by(sale_id=s.id).delete(synchronize_session=False)
+ for doc in SaleDocument.query.filter_by(sale_id=s.id).all():
+  if doc.storage_backend=='nas' and doc.storage_path:
+   try:nas_delete(doc.storage_path)
+   except StorageUnavailable:
+    flash('NAS 서류를 삭제할 수 없어 판매 기록 삭제를 중단했습니다. 잠시 후 다시 시도해주세요.','error');return redirect(url_for('sales'))
+  db.session.delete(doc)
  db.session.delete(s); db.session.commit(); flash('개통건이 삭제되었고 연결 재고는 보유중으로 복구되었습니다.','success'); return redirect(url_for('sales'))
 
 @app.route('/paybacks')

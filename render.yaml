@@ -16,3 +16,11 @@ services:
         sync: false
       - key: COOKIE_SECURE
         value: true
+      - key: NAS_WEBDAV_URL
+        sync: false
+      - key: NAS_WEBDAV_USERNAME
+        sync: false
+      - key: NAS_WEBDAV_PASSWORD
+        sync: false
+      - key: DOCUMENT_ENCRYPTION_KEY
+        sync: false
