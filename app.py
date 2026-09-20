@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session as OrmSession, with_loader_criteria
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
+from branch_login import configure_branches, resolve_scope, scope_allows
 
 load_dotenv()
 app=Flask(__name__)
@@ -702,6 +703,7 @@ def prepare_database():
 def sync_admin():
  prepare_database(); u=os.environ.get('ADMIN_USERNAME','').strip(); p=os.environ.get('ADMIN_PASSWORD',''); company_code=os.environ.get('COMPANY_LOGIN_ID','trustflow').strip().lower() or 'trustflow'
  if not u or not p:return
+ configure_branches(db,Branch,User,company_code,os.environ.get('BRANCH_LOGIN_CONFIG',''))
  user=User.query.filter_by(username=u).first()
  if not user:db.session.add(User(username=u,password_hash=generate_password_hash(p),role='admin',company_code=company_code));db.session.commit();return
  changed=False
@@ -740,7 +742,9 @@ def login():
   failures=LoginAttempt.query.filter_by(company_code=company_code,username=username,ip_address=ip,succeeded=False).filter(LoginAttempt.created_at>=since).count()
   if failures>=5:
    flash('로그인 시도가 많습니다. 15분 후 다시 시도하거나 비밀번호를 재설정해주세요.','error');return render_template('login.html',story=login_story()),429
-  user=User.query.filter_by(username=username,company_code=company_code).first()
+  resolved_company,login_branch=resolve_scope(Branch,company_code)
+  user=User.query.execution_options(skip_tenant=True).filter_by(username=username,company_code=resolved_company).first()
+  if not scope_allows(user,login_branch):user=None
   if user and user.active is False:
    flash('비활성화된 직원 계정입니다. 관리자에게 문의해주세요.','error'); return render_template('login.html',story=login_story())
   if user and check_password_hash(user.password_hash,request.form.get('password','')):
@@ -754,7 +758,8 @@ def signup():
  prepare_database();verification_sent=False
  if request.method=='POST':
   company=request.form.get('company_code','').strip().lower(); username=request.form.get('username','').strip(); name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('phone','')); password=request.form.get('password','');action=request.form.get('action','register')
-  company_exists=bool(company and User.query.filter_by(company_code=company).first())
+  company,login_branch=resolve_scope(Branch,company)
+  company_exists=bool(company and (login_branch is None or login_branch.active) and User.query.filter_by(company_code=company).first())
   if action=='send':
    if not all([company,name,phone]):flash('회사 전체아이디, 이름, 휴대전화를 입력해주세요.','error')
    elif not company_exists:flash('등록되지 않은 회사 전체아이디입니다.','error')
@@ -768,7 +773,7 @@ def signup():
    ok,message=verify_phone_code('signup',company,phone,request.form.get('code'))
    if not ok:flash(message,'error');verification_sent=True
    else:
-    user=User(username=username,password_hash=generate_password_hash(password),role='staff',display_name=name,company_code=company,recovery_phone=phone,active=False)
+    user=User(username=username,password_hash=generate_password_hash(password),role='staff',display_name=name,company_code=company,branch_id=login_branch.id if login_branch else None,recovery_phone=phone,active=False)
     db.session.add(user);db.session.add(AccountRequest(request_type='회원가입',company_code=company,username=username,display_name=name,phone=phone,status='대기'));db.session.commit();flash('가입 신청이 완료됐습니다. 회사 관리자의 승인을 기다려주세요.','success');return redirect(url_for('login'))
  return render_template('signup.html',verification_sent=verification_sent,form=request.form)
 
@@ -777,7 +782,9 @@ def find_id():
  prepare_database(); found=None; verification_sent=False
  if request.method=='POST':
   company=request.form.get('company_code','').strip().lower(); name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('phone','')); action=request.form.get('action','send')
+  company,login_branch=resolve_scope(Branch,company)
   user=User.query.filter_by(company_code=company,display_name=name,recovery_phone=phone).first()
+  if not scope_allows(user,login_branch):user=None
   if action=='send':
    if user:
     ok,message=issue_phone_code('find_id',company,phone); flash(message,'success' if ok else 'error'); verification_sent=ok or bool(PhoneVerification.query.filter_by(purpose='find_id',company_code=company,phone=phone).filter(PhoneVerification.expires_at>datetime.utcnow(),PhoneVerification.verified_at.is_(None)).first())
@@ -794,7 +801,9 @@ def password_help():
  prepare_database(); verification_sent=False; reset_done=False
  if request.method=='POST':
   company=request.form.get('company_code','').strip().lower(); username=request.form.get('username','').strip(); name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('phone','')); action=request.form.get('action','send')
+  company,login_branch=resolve_scope(Branch,company)
   user=User.query.filter_by(company_code=company,username=username,display_name=name,recovery_phone=phone).first()
+  if not scope_allows(user,login_branch):user=None
   if action=='send':
    if user:
     ok,message=issue_phone_code('password_reset',company,phone);flash(message,'success' if ok else 'error');verification_sent=ok or bool(PhoneVerification.query.filter_by(purpose='password_reset',company_code=company,phone=phone).filter(PhoneVerification.expires_at>datetime.utcnow(),PhoneVerification.verified_at.is_(None)).first())
