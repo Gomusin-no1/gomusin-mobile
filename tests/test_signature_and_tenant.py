@@ -11,7 +11,7 @@ os.environ['ADMIN_USERNAME']=''
 os.environ['ADMIN_PASSWORD']=''
 
 from werkzeug.security import generate_password_hash, check_password_hash
-from app import app, db, User, Branch, Customer, Inventory, InventoryMovement, Sale, WiredSale, CashLedger, AccountRequest, LOGIN_STORIES, PhoneVerification, _send_sms, issue_phone_code
+from app import app, db, User, Branch, Customer, Inventory, InventoryMovement, Sale, WiredSale, CashLedger, AccountRequest, LOGIN_STORIES, PhoneVerification, _send_sms, issue_phone_code, sms_provider_status
 
 
 class SignatureAndTenantTest(unittest.TestCase):
@@ -167,6 +167,19 @@ class SignatureAndTenantTest(unittest.TestCase):
    user=User.query.filter_by(company_code='company-a',username='new-staff').one();request_item=AccountRequest.query.filter_by(company_code='company-a',username='new-staff').one()
    self.assertFalse(user.active);self.assertEqual('01055556666',user.recovery_phone);self.assertEqual(('회원가입','대기'),(request_item.request_type,request_item.status))
 
+ def test_signup_flow_succeeds_twelve_consecutive_times(self):
+  for index in range(12):
+   phone=f'0107000{index:04d}'
+   base={'company_code':'company-a','display_name':f'반복직원{index}','phone':phone,'username':f'repeat-staff-{index}','password':'safe-password'}
+   sent=self.client.post('/signup',data={**base,'action':'send'})
+   self.assertEqual(200,sent.status_code,index)
+   self.assertIn('인증번호를 문자로 보냈습니다'.encode(),sent.data,index)
+   completed=self.client.post('/signup',data={**base,'action':'register','code':'123456'},follow_redirects=False)
+   self.assertEqual(302,completed.status_code,index)
+  with app.app_context():
+   self.assertEqual(12,User.query.filter(User.username.like('repeat-staff-%')).count())
+   self.assertEqual(12,AccountRequest.query.filter(AccountRequest.username.like('repeat-staff-%'),AccountRequest.status=='대기').count())
+
  def test_admin_approval_activates_signup_account(self):
   with app.app_context():
    user=User(username='pending-staff',password_hash=generate_password_hash('safe-password'),role='staff',display_name='대기직원',company_code='company-a',recovery_phone='01055556666',active=False)
@@ -231,6 +244,12 @@ class SignatureAndTenantTest(unittest.TestCase):
    finally:app.config['TESTING']=True
   self.assertEqual('01076671100',captured['message'].from_)
   self.assertEqual('01012345678',captured['message'].to)
+
+ def test_sms_provider_status_requires_complete_solapi_credentials(self):
+  keys=('SOLAPI_API_KEY','SOLAPI_API_SECRET','SMS_SENDER','SMS_WEBHOOK_URL')
+  with patch.dict(os.environ,{key:'' for key in keys},clear=False):self.assertEqual('missing',sms_provider_status())
+  with patch.dict(os.environ,{'SOLAPI_API_KEY':'key','SOLAPI_API_SECRET':'secret','SMS_SENDER':'01076671100','SMS_WEBHOOK_URL':''},clear=False):self.assertEqual('solapi',sms_provider_status())
+  with patch.dict(os.environ,{'SOLAPI_API_KEY':'','SOLAPI_API_SECRET':'','SMS_SENDER':'','SMS_WEBHOOK_URL':'https://sms.example.test'},clear=False):self.assertEqual('webhook',sms_provider_status())
 
  def test_sale_normalizes_phone_and_auto_transfers_inventory_between_company_branches(self):
   with app.app_context():

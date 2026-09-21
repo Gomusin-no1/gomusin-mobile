@@ -252,6 +252,15 @@ def normalize_phone(v):
 def _verification_hash(code):
  return hashlib.sha256(f"{app.config['SECRET_KEY']}:{code}".encode()).hexdigest()
 
+def sms_provider_status():
+ api_key=bool(os.environ.get('SOLAPI_API_KEY','').strip())
+ api_secret=bool(os.environ.get('SOLAPI_API_SECRET','').strip())
+ sender=bool(normalize_phone(os.environ.get('SMS_SENDER','')))
+ webhook=bool(os.environ.get('SMS_WEBHOOK_URL','').strip())
+ if api_key and api_secret and sender:return 'solapi'
+ if webhook:return 'webhook'
+ return 'missing'
+
 def _send_sms(phone,message):
  """Send SMS through SOLAPI, falling back to the legacy HTTPS webhook."""
  if app.config.get('TESTING'):return True
@@ -264,19 +273,25 @@ def _send_sms(phone,message):
    service=SolapiMessageService(api_key=api_key,api_secret=api_secret)
    response=service.send(RequestMessage(from_=sender,to=normalize_phone(phone),text=message))
    count=getattr(getattr(response,'group_info',None),'count',None)
-   return getattr(count,'registered_failed',0)==0
-  except Exception:
-   app.logger.exception('SOLAPI SMS delivery failed')
+   success=getattr(count,'registered_failed',1)==0
+   if not success:app.logger.error('SOLAPI rejected SMS registration')
+   return success
+  except Exception as exc:
+   app.logger.exception('SOLAPI SMS delivery failed: %s',type(exc).__name__)
    return False
  endpoint=os.environ.get('SMS_WEBHOOK_URL','').strip(); token=os.environ.get('SMS_WEBHOOK_TOKEN','').strip()
- if not endpoint:return False
+ if not endpoint:
+  app.logger.error('SMS delivery is not configured: set SOLAPI_API_KEY, SOLAPI_API_SECRET and SMS_SENDER')
+  return False
  payload=json.dumps({'to':phone,'message':message,'sender':sender or 'TrustFlow'},ensure_ascii=False).encode()
  headers={'Content-Type':'application/json'}
  if token:headers['Authorization']=f'Bearer {token}'
  try:
   with urllib.request.urlopen(urllib.request.Request(endpoint,data=payload,headers=headers,method='POST'),timeout=8) as response:
    return 200<=response.status<300
- except Exception:return False
+ except Exception as exc:
+  app.logger.exception('SMS webhook delivery failed: %s',type(exc).__name__)
+  return False
 
 def issue_phone_code(purpose,company,phone):
  company=(company or '').strip().lower();phone=normalize_phone(phone)
@@ -645,7 +660,7 @@ def server_error(error):
 
 @app.route('/health')
 def health():
- try:db.session.execute(text('SELECT 1'));return {'status':'ok','database':'connected'}
+ try:db.session.execute(text('SELECT 1'));return {'status':'ok','database':'connected','sms':sms_provider_status()}
  except Exception as e:return {'status':'error','message':str(e)},500
 @app.route('/login',methods=['GET','POST'])
 def login():
