@@ -1,4 +1,6 @@
-import os, calendar, io, secrets, json, hashlib, urllib.request
+import os, calendar, io, secrets, json, hashlib, hmac, urllib.request, threading
+from email_delivery import normalize_email, email_ready, send_email
+from sqlalchemy.exc import IntegrityError
 from datetime import datetime, date, timedelta
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, flash, abort, jsonify, send_file, has_request_context
@@ -63,6 +65,7 @@ def login_story():
  return {'image':f'images/login/hero-{index+1:02d}.webp','kicker':kicker,'title_a':title_a,'title_b':title_b,'body':body,'tags':tags}
 
 class User(db.Model):
+ email=db.Column(db.String(254)); email_verified_at=db.Column(db.DateTime)
  id=db.Column(db.Integer,primary_key=True); username=db.Column(db.String(50),nullable=False,index=True)
  password_hash=db.Column(db.String(255),nullable=False); role=db.Column(db.String(20),nullable=False,default='staff')
  display_name=db.Column(db.String(50)); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id')); active=db.Column(db.Boolean,default=True,nullable=False)
@@ -72,6 +75,7 @@ class User(db.Model):
  __table_args__=(db.UniqueConstraint('company_code','username',name='uq_user_company_username'),)
 
 class AccountRequest(db.Model):
+ email=db.Column(db.String(254))
  id=db.Column(db.Integer,primary_key=True); request_type=db.Column(db.String(20),nullable=False)
  company_code=db.Column(db.String(50),nullable=False,index=True); username=db.Column(db.String(50)); display_name=db.Column(db.String(50)); phone=db.Column(db.String(30)); status=db.Column(db.String(20),default='대기',nullable=False); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
 
@@ -80,6 +84,18 @@ class PhoneVerification(db.Model):
  purpose=db.Column(db.String(30),nullable=False,index=True); company_code=db.Column(db.String(50),nullable=False,index=True)
  phone=db.Column(db.String(30),nullable=False,index=True); code_hash=db.Column(db.String(64),nullable=False)
  attempts=db.Column(db.Integer,default=0,nullable=False); verified_at=db.Column(db.DateTime); expires_at=db.Column(db.DateTime,nullable=False,index=True)
+ created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False,index=True)
+
+class EmailVerification(db.Model):
+ id=db.Column(db.Integer,primary_key=True)
+ company_code=db.Column(db.String(50),nullable=False,index=True)
+ email=db.Column(db.String(254),nullable=False,index=True)
+ ip_address=db.Column(db.String(80),nullable=False,index=True)
+ code_hash=db.Column(db.String(64),nullable=False)
+ attempts=db.Column(db.Integer,default=0,nullable=False)
+ delivered=db.Column(db.Boolean,default=False,nullable=False)
+ verified_at=db.Column(db.DateTime)
+ expires_at=db.Column(db.DateTime,nullable=False,index=True)
  created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False,index=True)
 
 class LoginAttempt(db.Model):
@@ -317,6 +333,44 @@ def verify_phone_code(purpose,company,phone,code):
  if not secrets.compare_digest(item.code_hash,_verification_hash((code or '').strip())):
   db.session.commit();return False,'인증번호가 올바르지 않습니다.'
  item.verified_at=now;db.session.commit();return True,''
+
+def email_code_hash(item,code):
+ message=f'{item.id}:{item.company_code}:{item.email}:{code}'
+ return hmac.new(app.config['SECRET_KEY'].encode(),message.encode(),hashlib.sha256).hexdigest()
+
+def issue_email_code(company,email):
+ if not email_ready() and not app.config.get('TESTING'):
+  return False,'인증메일 발송 준비 중입니다. 회사 관리자에게 문의해주세요.'
+ now=datetime.utcnow()
+ ip=(request.headers.get('X-Forwarded-For','').split(',')[0].strip() or request.remote_addr or 'unknown')[:80]
+ recent=EmailVerification.query.filter_by(email=email).filter(EmailVerification.created_at>now-timedelta(hours=1))
+ if recent.count()>=5:return False,'인증메일 요청이 많습니다. 1시간 후 다시 시도해주세요.'
+ if recent.filter(EmailVerification.created_at>now-timedelta(minutes=1)).first():return False,'인증메일은 1분 후 다시 요청할 수 있습니다.'
+ if EmailVerification.query.filter_by(ip_address=ip).filter(EmailVerification.created_at>now-timedelta(hours=1)).count()>=20:
+  return False,'인증메일 요청이 많습니다. 1시간 후 다시 시도해주세요.'
+ EmailVerification.query.filter(EmailVerification.created_at<now-timedelta(days=2)).delete(synchronize_session=False)
+ code=f'{secrets.randbelow(1000000):06d}'
+ item=EmailVerification(company_code=company,email=email,ip_address=ip,code_hash='',expires_at=now+timedelta(minutes=10))
+ db.session.add(item);db.session.flush();item.code_hash=email_code_hash(item,code);db.session.commit()
+ if not send_email(email,'[TrustMap] 직원 가입 이메일 인증번호',f'인증번호: {code}\n10분 안에 입력해주세요.\n가입 신청 후 대표님의 지점 지정과 승인이 필요합니다.\n요청하지 않았다면 이 메일을 무시해주세요.'):
+  return False,'인증메일을 보내지 못했습니다. 잠시 후 다시 시도하거나 회사 관리자에게 문의해주세요.'
+ item.delivered=True;db.session.commit()
+ return True,'인증번호를 이메일로 보냈습니다. 10분 안에 입력해주세요. 스팸함도 확인해주세요.'
+
+def verify_email_code(company,email,code):
+ now=datetime.utcnow()
+ item=EmailVerification.query.filter_by(company_code=company,email=email,delivered=True).order_by(EmailVerification.id.desc()).first()
+ if not item or item.verified_at or item.expires_at<=now:return False,'이메일 인증번호가 만료됐습니다. 다시 받아주세요.'
+ if item.attempts>=5:return False,'입력 횟수를 초과했습니다. 새 인증번호를 받아주세요.'
+ eligible=EmailVerification.query.filter_by(id=item.id,verified_at=None).filter(EmailVerification.attempts<5,EmailVerification.expires_at>now)
+ correct=hmac.compare_digest(item.code_hash,email_code_hash(item,(code or '').strip()))
+ updates={'attempts':EmailVerification.attempts+1}
+ if correct:updates['verified_at']=now
+ changed=eligible.update(updates,synchronize_session=False)
+ if not changed:db.session.rollback();return False,'인증번호를 다시 받아주세요.'
+ if not correct:db.session.commit();return False,'이메일 인증번호가 올바르지 않습니다.'
+ # Consume atomically with account creation; registration failure rolls back consumption.
+ return True,''
 
 def parse_date(v):
  try:return datetime.strptime((v or '').strip(),'%Y-%m-%d').date() if v else None
@@ -621,7 +675,7 @@ def seed_masters():
  db.session.commit()
 
 def prepare_database():
- db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); _add_columns('sale_document',{'storage_backend':"VARCHAR(20) DEFAULT 'database'",'storage_path':'VARCHAR(500)','file_sha256':'VARCHAR(64)','is_encrypted':'BOOLEAN DEFAULT FALSE','sync_error':'VARCHAR(500)','nas_mirrored_at':'TIMESTAMP','nas_mirror_error':'VARCHAR(500)'}); upgrade_existing_sale()
+ db.create_all(); _add_columns('user',{'email':'VARCHAR(254)','email_verified_at':'TIMESTAMP'}); _add_columns('account_request',{'email':'VARCHAR(254)'}); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); _add_columns('sale_document',{'storage_backend':"VARCHAR(20) DEFAULT 'database'",'storage_path':'VARCHAR(500)','file_sha256':'VARCHAR(64)','is_encrypted':'BOOLEAN DEFAULT FALSE','sync_error':'VARCHAR(500)','nas_mirrored_at':'TIMESTAMP','nas_mirror_error':'VARCHAR(500)'}); upgrade_existing_sale()
  if db.engine.dialect.name=='postgresql':
   try:
    names={x.get('name') for x in db.inspect(db.engine).get_unique_constraints('user')}
@@ -630,6 +684,21 @@ def prepare_database():
     db.session.execute(text('ALTER TABLE "user" ADD CONSTRAINT uq_user_company_username UNIQUE (company_code, username)'));db.session.commit()
   except Exception:db.session.rollback()
  seed_branches(); seed_masters()
+
+_email_schema_ready=False
+_email_schema_lock=threading.Lock()
+
+@app.before_request
+def ensure_email_schema():
+ # Existing sessions hit authorization queries before route-level migrations.
+ global _email_schema_ready
+ if _email_schema_ready:return
+ with _email_schema_lock:
+  if _email_schema_ready:return
+  db.create_all()
+  _add_columns('user',{'email':'VARCHAR(254)','email_verified_at':'TIMESTAMP'})
+  _add_columns('account_request',{'email':'VARCHAR(254)'})
+  _email_schema_ready=True
 
 def sync_admin():
  prepare_database(); u=os.environ.get('ADMIN_USERNAME','').strip(); p=os.environ.get('ADMIN_PASSWORD',''); company_code=os.environ.get('COMPANY_LOGIN_ID','trustflow').strip().lower() or 'trustflow'
@@ -683,26 +752,37 @@ def login():
 
 @app.route('/signup',methods=['GET','POST'])
 def signup():
- prepare_database();verification_sent=False
+ prepare_database()
+ session.setdefault('signup_csrf',secrets.token_urlsafe(32))
  if request.method=='POST':
-  company=request.form.get('company_code','').strip().lower(); username=request.form.get('username','').strip(); name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('phone','')); password=request.form.get('password','');action=request.form.get('action','register')
-  company_exists=bool(company and User.query.filter_by(company_code=company).first())
-  if action=='send':
-   if not all([company,name,phone]):flash('회사 전체아이디, 이름, 휴대전화를 입력해주세요.','error')
-   elif not company_exists:flash('등록되지 않은 회사 전체아이디입니다.','error')
-   else:
-    ok,message=issue_phone_code('signup',company,phone);flash(message,'success' if ok else 'error');verification_sent=ok or bool(PhoneVerification.query.filter_by(purpose='signup',company_code=company,phone=phone).filter(PhoneVerification.expires_at>datetime.utcnow(),PhoneVerification.verified_at.is_(None)).first())
-  elif not all([company,username,name,phone,password]):flash('모든 항목을 입력해주세요.','error')
-  elif len(password)<8:flash('개인 비밀번호는 8자 이상 입력해주세요.','error');verification_sent=True
-  elif not company_exists:flash('등록되지 않은 회사 전체아이디입니다.','error')
-  elif User.query.filter_by(company_code=company,username=username).first():flash('이 회사에서 이미 사용 중인 개인아이디입니다.','error');verification_sent=True
+  if not secrets.compare_digest(session['signup_csrf'],request.form.get('csrf_token','')):abort(400)
+  company=request.form.get('company_code','').strip().lower()
+  username=request.form.get('username','').strip();name=request.form.get('display_name','').strip()
+  phone=normalize_phone(request.form.get('phone',''));email=normalize_email(request.form.get('email',''))
+  password=request.form.get('password','');action=request.form.get('action','register')
+  company_exists=bool(company and len(company)<=50 and User.query.filter_by(company_code=company).first())
+  if not company_exists:flash('등록되지 않은 회사 전체아이디입니다.','error')
+  elif not name or len(name)>50:flash('이름을 50자 이내로 입력해주세요.','error')
+  elif not email:flash('올바른 이메일 주소를 입력해주세요.','error')
+  elif action=='send':
+   ok,message=issue_email_code(company,email);flash(message,'success' if ok else 'error')
+  elif action!='register':abort(400)
+  elif not username or len(username)>50 or len(phone)!=11 or not phone.startswith('010'):
+   flash('개인아이디와 휴대전화 번호(010부터 11자리)를 확인해주세요.','error')
+  elif len(password)<8:flash('개인 비밀번호는 8자 이상 입력해주세요.','error')
+  elif User.query.filter_by(company_code=company,username=username).first():flash('이 회사에서 이미 사용 중인 개인아이디입니다.','error')
   else:
-   ok,message=verify_phone_code('signup',company,phone,request.form.get('code'))
-   if not ok:flash(message,'error');verification_sent=True
+   ok,message=verify_email_code(company,email,request.form.get('code'))
+   if not ok:flash(message,'error')
    else:
-    user=User(username=username,password_hash=generate_password_hash(password),role='staff',display_name=name,company_code=company,recovery_phone=phone,active=False)
-    db.session.add(user);db.session.add(AccountRequest(request_type='회원가입',company_code=company,username=username,display_name=name,phone=phone,status='대기'));db.session.commit();flash('가입 신청이 완료됐습니다. 회사 관리자의 승인을 기다려주세요.','success');return redirect(url_for('login'))
- return render_template('signup.html',verification_sent=verification_sent,form=request.form)
+    user=User(username=username,password_hash=generate_password_hash(password),role='staff',display_name=name,company_code=company,recovery_phone=phone,email=email,email_verified_at=datetime.utcnow(),active=False)
+    db.session.add(user);db.session.add(AccountRequest(request_type='회원가입',company_code=company,username=username,display_name=name,phone=phone,email=email,status='대기'))
+    try:db.session.commit()
+    except IntegrityError:
+     db.session.rollback();flash('이미 사용 중인 아이디입니다. 다른 아이디로 다시 신청해주세요.','error')
+    else:
+     session.pop('signup_csrf',None);flash('이메일 인증과 가입 신청이 완료됐습니다. 대표님의 지점 지정·승인 후 로그인할 수 있습니다.','success');return redirect(url_for('login'))
+ return render_template('signup.html',form=request.form,email_ready=email_ready() or app.config.get('TESTING'))
 
 @app.route('/find-id',methods=['GET','POST'])
 def find_id():
@@ -1851,7 +1931,8 @@ def account_request_complete(request_id):
  else:
   item.status='완료';message='비밀번호 재설정 요청을 완료 처리했습니다.'
  db.session.commit()
- if item.request_type=='회원가입' and item.phone and not _send_sms(item.phone,sms_message):flash(f'{message} 단, 결과 안내 문자는 발송되지 않았습니다.','error')
+ if item.request_type=='회원가입' and item.email and not send_email(item.email,'[TrustMap] 직원 가입 처리 결과',sms_message):flash(f'{message} 단, 결과 안내 이메일은 발송되지 않았습니다.','error')
+ elif item.request_type=='회원가입' and not item.email and item.phone and not _send_sms(item.phone,sms_message):flash(f'{message} 단, 결과 안내 문자는 발송되지 않았습니다.','error')
  else:flash(message,'success')
  return redirect(url_for('staff'))
 
