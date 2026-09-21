@@ -1190,7 +1190,7 @@ def notifications():
 @app.post('/tasks/<int:task_id>/status')
 @login_required
 def task_status(task_id):
- t=CustomerTask.query.get_or_404(task_id);
+ t=task_query_scoped().filter(CustomerTask.id==task_id).first_or_404();
  customer=Customer.query.get(t.customer_id) if t.customer_id else None
  if customer and not customer_allowed(customer):abort(403)
  sale=None
@@ -1215,7 +1215,7 @@ def task_status(task_id):
 @app.route('/tasks/<int:task_id>/edit',methods=['GET','POST'])
 @login_required
 def task_edit(task_id):
- t=CustomerTask.query.get_or_404(task_id)
+ t=task_query_scoped().filter(CustomerTask.id==task_id).first_or_404()
  if t.customer_id:
   customer=Customer.query.get(t.customer_id)
   if customer and not customer_allowed(customer):abort(403)
@@ -1383,9 +1383,9 @@ def customer_detail(cid):
  sq=Sale.query.filter_by(customer_phone=c.phone) if c.phone else Sale.query.filter(Sale.id==-1)
  if not is_admin(): sq=sq.filter(Sale.branch_id==current_branch_id())
  sale_history=sq.order_by(Sale.opening_date.desc(),Sale.id.desc()).all()
- if not sale_history and not is_admin(): abort(403)
+ if not sale_history and not is_admin() and c.branch_id!=current_branch_id(): abort(403)
  sale_ids=[s.id for s in sale_history]
- tasks=CustomerTask.query.filter(CustomerTask.sale_id.in_(sale_ids or [0])).order_by(CustomerTask.due_date.desc()).all()
+ tasks=task_query_scoped().filter(or_(CustomerTask.customer_id==c.id,CustomerTask.sale_id.in_(sale_ids or [0]))).order_by(CustomerTask.due_date.desc()).all()
  open_tasks=[t for t in tasks if t.status not in ['완료','취소']]
  paybacks=Payback.query.filter(Payback.sale_id.in_(sale_ids or [0])).order_by(Payback.due_date.desc()).all()
  doc_counts=dict(db.session.query(SaleDocument.sale_id,db.func.count(SaleDocument.id)).filter(SaleDocument.sale_id.in_(sale_ids or [0])).group_by(SaleDocument.sale_id).all())
@@ -2528,6 +2528,7 @@ def admin_archive_backup():
   'wired_product_master':WiredProductMaster.query.order_by(WiredProductMaster.id).all(),
   'device_master':DeviceMaster.query.order_by(DeviceMaster.id).all(),
  }
+ datasets.update(easysystem_backup_rows())
  def json_value(value):
   if isinstance(value,(datetime,date)):return value.isoformat()
   if isinstance(value,bytes):return None
@@ -2559,3 +2560,7 @@ def admin_archive_backup():
  archive.seek(0);size=archive.getbuffer().nbytes
  audit('관리자 전체보관백업 다운로드','system','backup',f'{date.today()} · {len(datasets)}개 데이터묶음 · 서류 {len(datasets["sale_documents"])}개 · {size} bytes · 무결성검증 완료');db.session.commit()
  return send_file(archive,as_attachment=True,download_name=f'TrustMap_전체보관백업_{date.today()}.zip',mimetype='application/zip')
+
+
+from easysystem_import import register_easysystem_import
+register_easysystem_import(app, db, globals())
