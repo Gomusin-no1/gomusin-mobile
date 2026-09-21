@@ -1,0 +1,5 @@
+<input type="hidden" name="permissions_present" value="1">
+<fieldset class="permission-box"><legend>업무별 접근 권한</legend><p class="muted">대표 관리자는 전체 권한입니다. 지점 관리자와 직원은 지정한 매장 안에서 아래 권한만 사용합니다.</p>
+<table class="permission-table"><thead><tr><th>업무</th><th>조회</th><th>등록 · 수정</th></tr></thead><tbody>
+{% for key,label in permission_features.items() %}<tr><td>{{label}}</td><td><input type="checkbox" name="allow_view" value="{{key}}" aria-label="{{label}} 조회" {% if key in access_values.view %}checked{% endif %}></td><td><input type="checkbox" name="allow_edit" value="{{key}}" aria-label="{{label}} 등록 수정" {% if key in access_values.edit %}checked{% endif %}></td></tr>{% endfor %}
+</tbody></table><label class="check-line"><input type="checkbox" name="allow_export" value="1" {% if access_values.export %}checked{% endif %}> 파일 다운로드 허용</label><small>조회가 꺼진 업무는 수정도 차단됩니다. 고객 상세와 개통 화면은 연결된 업무의 조회 권한도 필요합니다. 고객 서류 조회에는 파일 열람이 포함됩니다. 가입 승인·권한 변경·삭제·지점 간 이관은 대표 관리자 전용입니다.</small></fieldset>

@@ -1,4 +1,5 @@
-import os, calendar, io, secrets, json, hashlib, urllib.request, zipfile
+import os, calendar, io, secrets, json, hashlib, urllib.request, zipfile, threading
+from access_control import FEATURES, ENDPOINTS, permissions, allowed, parse_permissions
 from datetime import datetime, date, timedelta
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, flash, abort, jsonify, send_file, send_from_directory, has_request_context
@@ -68,6 +69,7 @@ def login_story():
  return {'image':f'images/login/hero-{index+1:02d}.webp','kicker':kicker,'title_a':title_a,'title_b':title_b,'body':body,'tags':tags}
 
 class User(db.Model):
+ job_title=db.Column(db.String(50)); permissions_json=db.Column(db.Text)
  id=db.Column(db.Integer,primary_key=True); username=db.Column(db.String(50),nullable=False,index=True)
  password_hash=db.Column(db.String(255),nullable=False); role=db.Column(db.String(20),nullable=False,default='staff')
  display_name=db.Column(db.String(50)); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id')); active=db.Column(db.Boolean,default=True,nullable=False)
@@ -501,6 +503,8 @@ def can_approve_payback():
 
 def notification_summary():
  if not session.get('user_id'):return {'total':0,'overdue_tasks':0,'today_tasks':0,'pending_approvals':0,'account_requests':0,'due_paybacks':0,'legal_deadlines':0,'download_alerts':0,'overdue_settlements':0,'backup_due':0,'database_expiry_due':0}
+ u=db.session.get(User,session['user_id'])
+ if u and u.role!='admin' and len(permissions(u)['view'])<len(FEATURES):return {'total':0,'overdue_tasks':0,'today_tasks':0,'pending_approvals':0,'account_requests':0,'due_paybacks':0,'legal_deadlines':0,'download_alerts':0,'overdue_settlements':0,'backup_due':0,'database_expiry_due':0}
  today=date.today(); open_states=['처리예정','연락안됨','연기']
  overdue_tasks=task_query_scoped().filter(CustomerTask.due_date<today,CustomerTask.status.in_(open_states)).count()
  today_tasks=task_query_scoped().filter(CustomerTask.due_date==today,CustomerTask.status.in_(open_states)).count()
@@ -539,6 +543,11 @@ def login_required(fn):
   session['role']=user.role
   session['branch_id']=user.branch_id
   session['company_code']=user.company_code.strip().lower()
+  if user.role=='manager':
+   branch=Branch.query.filter_by(id=user.branch_id,company_code=user.company_code,active=True).first()
+   if not branch:abort(403)
+  if not allowed(user,request.endpoint,request.method):abort(403)
+  if user.role!='admin' and request.endpoint=='notifications' and len(permissions(user)['view'])<len(FEATURES):abort(403)
   return fn(*a,**kw)
  return wrapped
 
@@ -546,6 +555,9 @@ def admin_required(fn):
  @wraps(fn)
  def wrapped(*a,**kw):
   if session.get('role')!='admin':abort(403)
+  if request.endpoint in {'staff','staff_edit','staff_toggle','staff_delete'}:
+   session.setdefault('staff_csrf',secrets.token_urlsafe(32))
+   if request.method=='POST' and not secrets.compare_digest(session['staff_csrf'],request.form.get('csrf_token','')):abort(400)
   return fn(*a,**kw)
  return wrapped
 
@@ -688,7 +700,7 @@ def seed_masters():
  db.session.commit()
 
 def prepare_database():
- db.create_all(); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','customer_type':"VARCHAR(30) DEFAULT '기존손님'",'address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)','hobbies':'VARCHAR(500)','interests':'VARCHAR(500)','marketing_consent':'BOOLEAN DEFAULT FALSE','marketing_consent_at':'TIMESTAMP','marketing_opt_out_at':'TIMESTAMP'}); _add_columns('price',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'rebate_amount':'INTEGER DEFAULT 0'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale()
+ db.create_all(); _add_columns('user',{'job_title':'VARCHAR(50)','permissions_json':'TEXT'}); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','customer_type':"VARCHAR(30) DEFAULT '기존손님'",'address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)','hobbies':'VARCHAR(500)','interests':'VARCHAR(500)','marketing_consent':'BOOLEAN DEFAULT FALSE','marketing_consent_at':'TIMESTAMP','marketing_opt_out_at':'TIMESTAMP'}); _add_columns('price',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'rebate_amount':'INTEGER DEFAULT 0'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); upgrade_existing_sale()
  _add_columns('booking',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','status':"VARCHAR(30) DEFAULT '예약'",'assigned_staff':'VARCHAR(50)','completed_at':'TIMESTAMP'})
  _add_columns('sms_campaign_recipient',{'last_attempt_at':'TIMESTAMP','next_attempt_at':'TIMESTAMP','attempt_count':'INTEGER DEFAULT 0'})
  if db.engine.dialect.name=='postgresql':
@@ -699,6 +711,31 @@ def prepare_database():
     db.session.execute(text('ALTER TABLE "user" ADD CONSTRAINT uq_user_company_username UNIQUE (company_code, username)'));db.session.commit()
   except Exception:db.session.rollback()
  seed_branches(); seed_masters()
+
+_permission_schema_ready=False
+_permission_schema_lock=threading.Lock()
+
+@app.before_request
+def ensure_permission_schema():
+ global _permission_schema_ready
+ if _permission_schema_ready:return
+ with _permission_schema_lock:
+  if _permission_schema_ready:return
+  db.create_all();_add_columns('user',{'job_title':'VARCHAR(50)','permissions_json':'TEXT'})
+  _permission_schema_ready=True
+
+def access_link(endpoint):
+ if not session.get('user_id'):return False
+ u=db.session.get(User,session['user_id'])
+ return bool(u and allowed(u,endpoint))
+
+def validated_assignment(role,branch_id):
+ if role not in {'admin','manager','staff','developer'}:abort(400)
+ try:bid=int(branch_id) if branch_id else None
+ except (ValueError,TypeError):abort(400)
+ if bid and not Branch.query.filter_by(id=bid,company_code=current_company(),active=True).first():abort(403)
+ if role=='manager' and not bid:abort(400)
+ return role,bid
 
 def sync_admin():
  prepare_database(); u=os.environ.get('ADMIN_USERNAME','').strip(); p=os.environ.get('ADMIN_PASSWORD',''); company_code=os.environ.get('COMPANY_LOGIN_ID','trustflow').strip().lower() or 'trustflow'
@@ -713,7 +750,7 @@ def sync_admin():
  if changed:db.session.commit()
 
 @app.context_processor
-def helpers():return dict(current_user=session.get('display_name') or session.get('username'),current_role=session.get('role'),current_company=session.get('company_code'),current_branch_id=current_branch_id(),can_approve_payback=can_approve_payback(),notification_summary=notification_summary(),moneyfmt=lambda v:f'{money(v):,}')
+def helpers():return dict(permission_features=FEATURES,permission_values=lambda u:permissions(u),access_link=access_link,role_label=lambda role:{'admin':'대표 관리자','manager':'지점 관리자','staff':'일반 직원','developer':'개발자'}.get(role,role),current_user=session.get('display_name') or session.get('username'),current_role=session.get('role'),current_company=session.get('company_code'),current_branch_id=current_branch_id(),can_approve_payback=can_approve_payback(),notification_summary=notification_summary(),moneyfmt=lambda v:f'{money(v):,}')
 
 @app.errorhandler(403)
 def forbidden_error(error):
@@ -748,7 +785,7 @@ def login():
   if user and user.active is False:
    flash('비활성화된 직원 계정입니다. 관리자에게 문의해주세요.','error'); return render_template('login.html',story=login_story())
   if user and check_password_hash(user.password_hash,request.form.get('password','')):
-   db.session.add(LoginAttempt(company_code=company_code,username=username,ip_address=ip,succeeded=True));db.session.commit();session.clear();session.update(user_id=user.id,username=user.username,display_name=user.display_name or user.username,role=user.role,branch_id=user.branch_id,company_code=user.company_code);return redirect(url_for('dashboard'))
+   db.session.add(LoginAttempt(company_code=company_code,username=username,ip_address=ip,succeeded=True));db.session.commit();session.clear();session.update(user_id=user.id,username=user.username,display_name=user.display_name or user.username,role=user.role,branch_id=user.branch_id,company_code=user.company_code);return redirect(url_for('manager_portal' if user.role=='manager' else 'dashboard'))
   db.session.add(LoginAttempt(company_code=company_code,username=username,ip_address=ip,succeeded=False));db.session.commit()
   flash('아이디 또는 비밀번호가 올바르지 않습니다.','error')
  return render_template('login.html',story=login_story())
@@ -1134,6 +1171,8 @@ def booking_status(booking_id):
 @app.route('/')
 @login_required
 def dashboard():
+ u=db.session.get(User,session['user_id'])
+ if u.role=='manager' or (u.role!='admin' and len(permissions(u)['view'])<len(FEATURES)):return redirect(url_for('manager_portal'))
  prepare_database(); today=date.today(); selected=parse_date(request.args.get('date')) or today
  start=date(today.year,today.month,1); end=add_months(start,1)
  tq=task_query_scoped()
@@ -1169,7 +1208,9 @@ def dashboard():
 @app.get('/notifications')
 @login_required
 def notifications():
- prepare_database(); today=date.today(); open_states=['처리예정','연락안됨','연기']
+ prepare_database(); u=db.session.get(User,session['user_id'])
+ if u and u.role!='admin' and len(permissions(u)['view'])<len(FEATURES):return {'total':0,'overdue_tasks':0,'today_tasks':0,'pending_approvals':0,'account_requests':0,'due_paybacks':0,'legal_deadlines':0}
+ today=date.today(); open_states=['처리예정','연락안됨','연기']
  overdue_tasks=task_query_scoped().filter(CustomerTask.due_date<today,CustomerTask.status.in_(open_states)).order_by(CustomerTask.due_date.asc()).limit(100).all()
  today_tasks=task_query_scoped().filter(CustomerTask.due_date==today,CustomerTask.status.in_(open_states)).order_by(CustomerTask.id.desc()).limit(100).all()
  pq=payback_query_scoped(); due_paybacks=pq.filter(Payback.status!='완료',Payback.due_date<=today).order_by(Payback.due_date.asc()).limit(100).all()
@@ -1757,7 +1798,7 @@ def partner_new():
 @login_required
 def branches():
  rows=[]
- for b in Branch.query.order_by(Branch.id).all():
+ for b in (Branch.query if is_admin() else Branch.query.filter_by(id=current_branch_id())).order_by(Branch.id).all():
   rows.append((b,Inventory.query.filter_by(branch_id=b.id,status='보유중').count(),Sale.query.filter_by(branch_id=b.id).count(),User.query.filter_by(branch_id=b.id).count()))
  return render_template('branches.html',rows=rows)
 
@@ -2348,12 +2389,14 @@ def staff():
  prepare_database()
  if request.method=='POST':
   u=request.form.get('username','').strip(); pw=request.form.get('password',''); role=request.form.get('role','staff'); display_name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('recovery_phone','')); branch_id=request.form.get('branch_id') or None; company=session.get('company_code') or 'trustflow'
+  role,branch_id=validated_assignment(role,branch_id)
   if not u or not pw or not display_name:
    flash('직원명, 로그인 아이디, 비밀번호를 모두 입력해주세요.','error')
+  elif len(pw)<8 or len(u)>50 or len(display_name)>50:flash('비밀번호는 8자 이상, 이름과 아이디는 50자 이내로 입력해주세요.','error')
   elif User.query.filter_by(company_code=company,username=u).first():
    flash('이 회사에서 이미 사용 중인 로그인 아이디입니다.','error')
   else:
-   db.session.add(User(username=u,password_hash=generate_password_hash(pw),role=role,display_name=display_name,branch_id=branch_id,company_code=company,recovery_phone=phone,active=True)); db.session.commit(); flash('직원이 등록되었습니다.','success')
+   db.session.add(User(username=u,password_hash=generate_password_hash(pw),role=role,display_name=display_name,branch_id=branch_id,company_code=company,recovery_phone=phone,job_title=request.form.get('job_title','').strip()[:50],permissions_json=parse_permissions(request.form) if request.form.get('permissions_present') else None,active=True)); audit('직원 권한 지정','user',u,f'권한={role}, 지점={branch_id}'); db.session.commit(); flash('직원이 등록되었습니다.','success')
   return redirect(url_for('staff'))
  company=session.get('company_code') or 'trustflow'
  users=User.query.filter_by(company_code=company).order_by(User.active.desc(),User.display_name,User.username).all()
@@ -2369,9 +2412,16 @@ def staff_edit(uid):
   display_name=request.form.get('display_name','').strip()
   if not display_name:
    flash('직원명을 입력해주세요.','error'); return redirect(url_for('staff_edit',uid=uid))
-  u.display_name=display_name; u.branch_id=request.form.get('branch_id') or None; u.role=request.form.get('role','staff'); u.recovery_phone=normalize_phone(request.form.get('recovery_phone','')); u.active=request.form.get('active')=='1';u.can_approve_payback=request.form.get('can_approve_payback')=='1'
+  role,bid=validated_assignment(request.form.get('role','staff'),request.form.get('branch_id'))
+  if u.id==session['user_id'] and (role!='admin' or request.form.get('active')!='1'):abort(400)
+  u.job_title=request.form.get('job_title','').strip()[:50]
+  if request.form.get('permissions_present'):u.permissions_json=parse_permissions(request.form)
+  audit('직원 권한 변경','user',u.id,f'권한={u.role}→{role}, 지점={u.branch_id}→{bid}')
+  u.display_name=display_name; u.branch_id=bid; u.role=role; u.recovery_phone=normalize_phone(request.form.get('recovery_phone','')); u.active=request.form.get('active')=='1';u.can_approve_payback=request.form.get('can_approve_payback')=='1'
   new_pw=request.form.get('password','')
-  if new_pw: u.password_hash=generate_password_hash(new_pw)
+  if new_pw:
+   if len(new_pw)<8:db.session.rollback();abort(400)
+   u.password_hash=generate_password_hash(new_pw)
   db.session.commit()
   if session.get('user_id')==u.id:
    session['display_name']=u.display_name; session['role']=u.role
@@ -2564,3 +2614,42 @@ def admin_archive_backup():
 
 from easysystem_import import register_easysystem_import
 register_easysystem_import(app, db, globals())
+
+@app.route('/manager')
+@login_required
+def manager_portal():
+ u=db.session.get(User,session['user_id'])
+ branch=Branch.query.filter_by(id=u.branch_id,company_code=current_company()).first() if u.branch_id else None
+ users=[]
+ if u.role=='admin':users=User.query.filter_by(company_code=current_company()).order_by(User.id).all()
+ elif u.role=='manager':users=User.query.filter_by(company_code=current_company(),branch_id=u.branch_id).order_by(User.id).all()
+ routes={'customers':'customers','sales':'sales','documents':'sales','inventory':'inventory','paybacks':'paybacks','tasks':'manager_tasks','wired':'wired_sales','cash':'cash_ledger','legal':'legal_cases','partners':'partners','branches':'branches','tools':'date_calculator'}
+ return render_template('manager_portal.html',u=u,branch=branch,users=users,routes=routes,rules=permissions(u))
+
+@app.route('/my-account',methods=['GET','POST'])
+@login_required
+def my_account():
+ u=db.session.get(User,session['user_id'])
+ session.setdefault('profile_csrf',secrets.token_urlsafe(32))
+ if request.method=='POST':
+  if not secrets.compare_digest(session['profile_csrf'],request.form.get('csrf_token','')):abort(400)
+  name=request.form.get('display_name','').strip();phone=normalize_phone(request.form.get('phone',''))
+  if not name or len(name)>50 or (phone and (len(phone)!=11 or not phone.startswith('010'))):
+   flash('이름과 휴대전화 번호를 확인해주세요.','error')
+  elif not check_password_hash(u.password_hash,request.form.get('current_password','')):
+   flash('현재 비밀번호가 올바르지 않습니다.','error')
+  elif request.form.get('new_password') and (len(request.form['new_password'])<8 or request.form['new_password']!=request.form.get('password_confirm')):
+   flash('새 비밀번호를 8자 이상으로 동일하게 두 번 입력해주세요.','error')
+  else:
+   u.display_name=name;u.recovery_phone=phone
+   if request.form.get('new_password'):u.password_hash=generate_password_hash(request.form['new_password'])
+   audit('본인 계정정보 변경','user',u.id);db.session.commit();flash('회원정보를 저장했습니다.','success')
+   return redirect(url_for('manager_portal'))
+ return render_template('my_account.html',u=u)
+
+
+@app.get('/my-tasks')
+@login_required
+def manager_tasks():
+ items=task_query_scoped().filter(CustomerTask.status.in_(['처리예정','연락안됨','연기'])).order_by(CustomerTask.due_date,CustomerTask.id).limit(200).all()
+ return render_template('manager_tasks.html',items=items)
