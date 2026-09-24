@@ -18,6 +18,9 @@ class SignatureAndTenantTest(unittest.TestCase):
  def setUp(self):
   app.config.update(TESTING=True,SECRET_KEY='test-secret')
   self.client=app.test_client()
+  self.mail_patch=patch('app.send_email',return_value=True);self.mail_patch.start();self.addCleanup(self.mail_patch.stop)
+  self.code_patch=patch('app.secrets.randbelow',side_effect=lambda n:123456 if n==1000000 else 0);self.code_patch.start();self.addCleanup(self.code_patch.stop)
+  with self.client.session_transaction() as sess:sess['signup_csrf']='test-csrf'
   with app.app_context():
    db.drop_all();db.create_all()
    a=Branch(name='A 본점',code='A99',company_code='company-a')
@@ -155,8 +158,8 @@ class SignatureAndTenantTest(unittest.TestCase):
   response=self.client.post('/find-id',data=base)
   self.assertIn('1분 후 다시 요청'.encode(),response.data);self.assertIn('name="code"'.encode(),response.data)
 
- def test_signup_requires_phone_verification_and_creates_approval_request(self):
-  base={'company_code':'company-a','display_name':'신입직원','phone':'010-5555-6666','username':'new-staff','password':'safe-password'}
+ def test_signup_requires_email_verification_and_creates_approval_request(self):
+  base={'company_code':'company-a','display_name':'신입직원','phone':'010-5555-6666','username':'new-staff','password':'safe-password','email':'new@example.com','csrf_token':'test-csrf'}
   response=self.client.post('/signup',data={**base,'action':'register','code':'123456'})
   self.assertIn('인증번호가 만료'.encode(),response.data)
   with app.app_context():self.assertIsNone(User.query.filter_by(username='new-staff').first())
@@ -169,11 +172,12 @@ class SignatureAndTenantTest(unittest.TestCase):
 
  def test_signup_flow_succeeds_twelve_consecutive_times(self):
   for index in range(12):
+   with self.client.session_transaction() as sess:sess['signup_csrf']='test-csrf'
    phone=f'0107000{index:04d}'
-   base={'company_code':'company-a','display_name':f'반복직원{index}','phone':phone,'username':f'repeat-staff-{index}','password':'safe-password'}
+   base={'company_code':'company-a','display_name':f'반복직원{index}','phone':phone,'username':f'repeat-staff-{index}','password':'safe-password','email':f'repeat{index}@example.com','csrf_token':'test-csrf'}
    sent=self.client.post('/signup',data={**base,'action':'send'})
    self.assertEqual(200,sent.status_code,index)
-   self.assertIn('인증번호를 문자로 보냈습니다'.encode(),sent.data,index)
+   self.assertIn('인증번호를 이메일로 보냈습니다'.encode(),sent.data,index)
    completed=self.client.post('/signup',data={**base,'action':'register','code':'123456'},follow_redirects=False)
    self.assertEqual(302,completed.status_code,index)
   with app.app_context():
