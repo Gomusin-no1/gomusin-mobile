@@ -1436,12 +1436,12 @@ def customers_export():
  return send_file(out,as_attachment=True,download_name=f'TrustMap_고객목록_{date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 CUSTOMER_HEADER_ALIASES={
- 'name':{'고객명','이름','성명','name','customer'},'phone':{'휴대전화','휴대폰','전화번호','연락처','핸드폰','phone','mobile'},
+ 'name':{'고객명','이름','성명','name','customer'},'phone':{'휴대전화','휴대폰','휴대폰번호','전화번호','연락처','핸드폰','phone','mobile'},
  'customer_type':{'고객유형','유형','구분','customertype','type'},'carrier':{'통신사','carrier','telecom'},
  'address_road':{'도로명주소','신주소','roadaddress'},'address_jibun':{'구주소','지번주소','address'},'address_detail':{'상세주소','동호수','detailaddress'},
  'hobbies':{'취미','hobby','hobbies'},'interests':{'관심사','관심분야','interest','interests'},'memo':{'메모','비고','memo','note'},
  'reservation_date':{'예약일','예약날짜','처리예정일'},'task_type':{'처리항목','예약유형','업무유형'},
- 'marketing_consent':{'문자수신동의','마케팅동의','수신동의','smsconsent','consent'},'branch':{'지점','매장','branch','store'}
+ 'marketing_consent':{'문자수신동의','마케팅동의','수신동의','smsconsent','consent'},'branch':{'지점','매장','처리점','branch','store'}
 }
 
 def customer_header_positions(header):
@@ -1496,7 +1496,6 @@ def customers_import():
     name=str(value('name') or '').strip();phone=normalize_excel_phone(value('phone'))
     if not name or len(phone)<10:invalid+=1;continue
     row_branch=branches.get(normalize_excel_header(value('branch'))) if value('branch') else branch
-    if not row_branch:row_branch=branch
     if not row_branch:invalid+=1;continue
     due=None
     if value('reservation_date'):
@@ -2764,5 +2763,15 @@ def my_account():
 @app.get('/my-tasks')
 @login_required
 def manager_tasks():
- items=task_query_scoped().filter(CustomerTask.status.in_(['처리예정','연락안됨','연기'])).order_by(CustomerTask.due_date,CustomerTask.id).limit(200).all()
- return render_template('manager_tasks.html',items=items)
+ today=business_today();view=request.args.get('view','today')
+ if view not in ('today','overdue','upcoming','all','completed'):view='today'
+ selected=parse_date(request.args.get('date'));q=task_query_scoped()
+ if view=='completed':q=q.filter(CustomerTask.status=='완료')
+ else:q=q.filter(CustomerTask.status.in_(['처리예정','연락안됨','연기']))
+ if selected:q=q.filter(CustomerTask.due_date==selected)
+ elif view=='today':q=q.filter(CustomerTask.due_date==today)
+ elif view=='overdue':q=q.filter(CustomerTask.due_date<today)
+ elif view=='upcoming':q=q.filter(CustomerTask.due_date>today)
+ page=max(1,request.args.get('page',1,type=int));total=q.count();pages=max(1,(total+49)//50);page=min(page,pages)
+ items=q.order_by(CustomerTask.due_date,CustomerTask.id).offset((page-1)*50).limit(50).all()
+ return render_template('manager_tasks.html',items=items,today=today,view=view,selected=selected,page=page,pages=pages,total=total)

@@ -1,1 +1,13 @@
-{% extends 'base.html' %}{% block page_title %}우리 매장 고객 약속{% endblock %}{% block content %}<section class="panel"><div class="panel-title"><h2>처리할 약속</h2><a class="btn" href="{{url_for('manager_portal')}}">관리 페이지</a></div><div class="task-list">{% for t in items %}<article class="task-card"><div><span class="tag">{{t.task_type}}</span><b>{{t.title}}</b><small>{{t.due_date or '일정 미정'}} · {{t.status}}</small></div>{% if access_link('task_edit') %}<a class="btn small" href="{{url_for('task_edit',task_id=t.id)}}">상세 · 처리</a>{% endif %}</article>{% else %}<div class="empty">처리할 약속이 없습니다.</div>{% endfor %}</div></section>{% endblock %}
+{% extends 'base.html' %}
+{% block page_title %}고객약속{% endblock %}
+{% block content %}
+<section class="panel">
+<div class="panel-title"><div><h2>고객약속 확인 · 처리</h2><span>{{today.strftime('%m월 %d일')}} · 한국시간 기준</span></div><a class="btn" href="{{url_for('manager_portal')}}">홈으로</a></div>
+<nav class="action-row" aria-label="고객약속 기간">
+{% for key,label in [('today','오늘'),('overdue','기한 지남'),('upcoming','예정'),('all','전체 미처리'),('completed','완료')] %}<a class="btn {{'primary' if view==key and not selected else ''}}" {% if view==key and not selected %}aria-current="page"{% endif %} href="{{url_for('manager_tasks',view=key)}}">{{label}}</a>{% endfor %}
+</nav>
+<form class="filterbar" method="get"><input type="hidden" name="view" value="{{view}}"><label>예약일<input type="date" name="date" value="{{selected.isoformat() if selected else ''}}" required></label><button class="btn">해당 날짜 조회</button>{% if selected %}<a class="btn" href="{{url_for('manager_tasks',view=view)}}">날짜 선택 해제</a>{% endif %}</form>
+<p><b>{{selected.strftime('%m월 %d일') if selected else {'today':'오늘','overdue':'기한 지난','upcoming':'앞으로 예정된','all':'전체 미처리','completed':'완료한'}[view]}} 고객약속 {{total}}건</b> · {{page}} / {{pages}}페이지{% if selected %} · {{'완료' if view=='completed' else '미처리'}} 기준{% endif %}</p>
+<div class="task-list">{% for t in items %}<article class="task-card"><div><span class="tag">{{t.task_type}}</span><b>{{t.title}}</b><small>{{t.due_date or '일정 미정'}} · {{t.status}} · 담당 {{t.assigned_staff or '미지정'}}</small><small>{{t.description or ''}}</small></div>{% if access_link('task_edit') %}<a class="btn small" href="{{url_for('task_edit',task_id=t.id)}}">상세 · 처리</a>{% endif %}</article>{% else %}<div class="empty">이 조건에 해당하는 고객약속이 없습니다. 다른 날짜나 전체 미처리를 확인하세요.</div>{% endfor %}</div>
+<nav class="action-row" aria-label="고객약속 페이지">{% if page>1 %}<a class="btn" href="{{url_for('manager_tasks',view=view,date=selected.isoformat() if selected else '',page=page-1)}}">이전 50건</a>{% endif %}{% if page<pages %}<a class="btn" href="{{url_for('manager_tasks',view=view,date=selected.isoformat() if selected else '',page=page+1)}}">다음 50건</a>{% endif %}</nav>
+</section>{% endblock %}
