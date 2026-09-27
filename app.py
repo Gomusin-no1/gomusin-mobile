@@ -3,6 +3,7 @@ from access_control import FEATURES, ENDPOINTS, permissions, allowed, parse_perm
 from email_delivery import normalize_email, email_ready, send_email
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, flash, abort, jsonify, send_file, send_from_directory, has_request_context
 from flask_sqlalchemy import SQLAlchemy
@@ -529,6 +530,18 @@ def customer_allowed(customer):
 def sale_allowed(sale):
  return bool(sale and (is_admin() or (current_branch_id() and sale.branch_id==current_branch_id())))
 
+def business_today():
+ return datetime.now(ZoneInfo('Asia/Seoul')).date()
+
+def home_work():
+ today=business_today(); user=db.session.get(User,session['user_id'])
+ if user.role!='admin' and 'tasks' not in permissions(user)['view']:
+  return None
+ tasks=task_query_scoped().filter(CustomerTask.due_date==today,CustomerTask.status.in_(['처리예정','연락안됨','연기'])).order_by(CustomerTask.id).all()
+ overdue=task_query_scoped().filter(CustomerTask.due_date<today,CustomerTask.status.in_(['처리예정','연락안됨','연기'])).count()
+ bookings=apply_branch_scope(Booking.query,Booking).filter(Booking.visit_date.like(f'{today.isoformat()}%'),Booking.status=='예약').order_by(Booking.visit_date).all()
+ return dict(today=today,tasks=tasks,overdue=overdue,bookings=bookings)
+
 def task_query_scoped():
  q=CustomerTask.query.outerjoin(Sale,CustomerTask.sale_id==Sale.id).outerjoin(Customer,CustomerTask.customer_id==Customer.id)
  if is_admin():return q.filter(or_(Sale.branch_id.in_(db.session.query(Branch.id)),Customer.company_code==current_company()))
@@ -559,7 +572,7 @@ def notification_summary():
  if not session.get('user_id'):return {'total':0,'overdue_tasks':0,'today_tasks':0,'pending_approvals':0,'account_requests':0,'due_paybacks':0,'legal_deadlines':0,'download_alerts':0,'overdue_settlements':0,'backup_due':0,'database_expiry_due':0}
  u=db.session.get(User,session['user_id'])
  if u and u.role!='admin' and len(permissions(u)['view'])<len(FEATURES):return {'total':0,'overdue_tasks':0,'today_tasks':0,'pending_approvals':0,'account_requests':0,'due_paybacks':0,'legal_deadlines':0,'download_alerts':0,'overdue_settlements':0,'backup_due':0,'database_expiry_due':0}
- today=date.today(); open_states=['처리예정','연락안됨','연기']
+ today=business_today(); open_states=['처리예정','연락안됨','연기']
  overdue_tasks=task_query_scoped().filter(CustomerTask.due_date<today,CustomerTask.status.in_(open_states)).count()
  today_tasks=task_query_scoped().filter(CustomerTask.due_date==today,CustomerTask.status.in_(open_states)).count()
  pq=payback_query_scoped()
@@ -1254,7 +1267,7 @@ def booking_status(booking_id):
 def dashboard():
  u=db.session.get(User,session['user_id'])
  if u.role=='manager' or (u.role!='admin' and len(permissions(u)['view'])<len(FEATURES)):return redirect(url_for('manager_portal'))
- prepare_database(); today=date.today(); selected=parse_date(request.args.get('date')) or today
+ prepare_database(); today=business_today(); selected=parse_date(request.args.get('date')) or today
  start=date(today.year,today.month,1); end=add_months(start,1)
  tq=task_query_scoped()
  dashboard_priority=task_query_scoped().filter(CustomerTask.due_date<=today,CustomerTask.status.in_(['처리예정','연락안됨','연기'])).order_by(CustomerTask.due_date.asc(),CustomerTask.id.asc()).all()
@@ -1284,14 +1297,14 @@ def dashboard():
   weekly[min((sale.opening_date.day-1)//7,4)]+=sale.settlement_amount_v2 or money(sale.settlement)
  dashboard_summary={'weekly':weekly,'weekly_max':max(weekly+[1]),'monthly':sum(weekly),'daily':sum(s.settlement_amount_v2 or money(s.settlement) for s in today_sale_items),'visits':booking_q.filter(Booking.visit_date.like(f'{today.isoformat()}%'),Booking.status=='방문완료').count(),'stock':apply_branch_scope(Inventory.query,Inventory).filter(Inventory.status=='보유중').count()}
  cal=calendar.Calendar(firstweekday=6); weeks=cal.monthdayscalendar(today.year,today.month)
- return render_template('dashboard.html',today=today,selected=selected,tasks=tasks,overdue=overdue,overdue_settlements=overdue_settlements,counts=counts,weeks=weeks,year=today.year,month=today.month,today_sales=len(today_sale_items),today_sale_items=today_sale_items,pending_paybacks=pending_paybacks,today_paybacks=today_paybacks,sales_map=sales_map,branches=branches,task_due_stage=task_due_stage,selected_bookings=selected_bookings,today_bookings=today_bookings,performance_rows=performance_rows,performance_totals=performance_totals,dashboard_summary=dashboard_summary,dashboard_priority=dashboard_priority)
+ return render_template('dashboard.html',home_work=home_work(),today=today,selected=selected,tasks=tasks,overdue=overdue,overdue_settlements=overdue_settlements,counts=counts,weeks=weeks,year=today.year,month=today.month,today_sales=len(today_sale_items),today_sale_items=today_sale_items,pending_paybacks=pending_paybacks,today_paybacks=today_paybacks,sales_map=sales_map,branches=branches,task_due_stage=task_due_stage,selected_bookings=selected_bookings,today_bookings=today_bookings,performance_rows=performance_rows,performance_totals=performance_totals,dashboard_summary=dashboard_summary,dashboard_priority=dashboard_priority)
 
 @app.get('/notifications')
 @login_required
 def notifications():
  prepare_database(); u=db.session.get(User,session['user_id'])
  if u and u.role!='admin' and len(permissions(u)['view'])<len(FEATURES):return {'total':0,'overdue_tasks':0,'today_tasks':0,'pending_approvals':0,'account_requests':0,'due_paybacks':0,'legal_deadlines':0}
- today=date.today(); open_states=['처리예정','연락안됨','연기']
+ today=business_today(); open_states=['처리예정','연락안됨','연기']
  overdue_tasks=task_query_scoped().filter(CustomerTask.due_date<today,CustomerTask.status.in_(open_states)).order_by(CustomerTask.due_date.asc()).limit(100).all()
  today_tasks=task_query_scoped().filter(CustomerTask.due_date==today,CustomerTask.status.in_(open_states)).order_by(CustomerTask.id.desc()).limit(100).all()
  pq=payback_query_scoped(); due_paybacks=pq.filter(Payback.status!='완료',Payback.due_date<=today).order_by(Payback.due_date.asc()).limit(100).all()
@@ -1427,6 +1440,7 @@ CUSTOMER_HEADER_ALIASES={
  'customer_type':{'고객유형','유형','구분','customertype','type'},'carrier':{'통신사','carrier','telecom'},
  'address_road':{'도로명주소','신주소','roadaddress'},'address_jibun':{'구주소','지번주소','address'},'address_detail':{'상세주소','동호수','detailaddress'},
  'hobbies':{'취미','hobby','hobbies'},'interests':{'관심사','관심분야','interest','interests'},'memo':{'메모','비고','memo','note'},
+ 'reservation_date':{'예약일','예약날짜','처리예정일'},'task_type':{'처리항목','예약유형','업무유형'},
  'marketing_consent':{'문자수신동의','마케팅동의','수신동의','smsconsent','consent'},'branch':{'지점','매장','branch','store'}
 }
 
@@ -1450,8 +1464,8 @@ def normalize_excel_phone(value):
 def customers_template():
  from openpyxl import Workbook
  from openpyxl.styles import Font,PatternFill
- wb=Workbook();ws=wb.active;ws.title='고객 등록';headers=['고객명','휴대전화','고객유형','통신사','도로명주소','구주소','상세주소','취미','관심사','메모','문자수신동의','지점']
- ws.append(headers);ws.append(['홍길동','01012345678','기존손님','SK','인천광역시 부평구 예시로 1','','101동 101호','낚시','인터넷 결합','','미동의','부평본점'])
+ wb=Workbook();ws=wb.active;ws.title='고객 등록';headers=['고객명','휴대전화','고객유형','통신사','도로명주소','구주소','상세주소','취미','관심사','메모','문자수신동의','지점','예약일','처리항목']
+ ws.append(headers);ws.append(['홍길동','01012345678','기존손님','SK','인천광역시 부평구 예시로 1','','101동 101호','낚시','인터넷 결합','','미동의','부평본점','',''])
  for cell in ws[1]:cell.font=Font(bold=True,color='FFFFFF');cell.fill=PatternFill('solid',fgColor='14324A')
  ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
  for col,width in zip('ABCDEFGHIJKL',[16,16,13,10,34,34,22,20,24,30,15,16]):ws.column_dimensions[col].width=width
@@ -1469,7 +1483,7 @@ def customers_import():
  if default_branch and not branch:abort(403)
  try:
   from openpyxl import load_workbook
-  book=load_workbook(upload,read_only=True,data_only=True);created=duplicates=invalid=0;seen=set();recognized=False
+  book=load_workbook(upload,read_only=True,data_only=True);created=duplicates=invalid=task_created=0;seen=set();recognized=False
   branches={normalize_excel_header(x.name):x for x in Branch.query.filter_by(active=True).all()};existing={normalize_phone(x[0]) for x in db.session.query(Customer.phone).filter(Customer.phone.isnot(None)).all() if x[0]}
   consent_values={'동의','예','yes','y','true','1','수신동의','o'};allowed_types={'로드손님','성지손님','기존손님'}
   for sheet in book.worksheets:
@@ -1481,18 +1495,35 @@ def customers_import():
      index=positions.get(key);return row[index] if index is not None and index<len(row) else None
     name=str(value('name') or '').strip();phone=normalize_excel_phone(value('phone'))
     if not name or len(phone)<10:invalid+=1;continue
-    if phone in existing or phone in seen:duplicates+=1;continue
     row_branch=branches.get(normalize_excel_header(value('branch'))) if value('branch') else branch
     if not row_branch:row_branch=branch
     if not row_branch:invalid+=1;continue
+    due=None
+    if value('reservation_date'):
+     raw_due=value('reservation_date')
+     due=raw_due.date() if isinstance(raw_due,datetime) else (raw_due if isinstance(raw_due,date) else parse_date(str(raw_due).strip()))
+     if not due:invalid+=1;continue
+    customer=Customer.query.filter_by(company_code=current_company(),branch_id=row_branch.id,phone=phone).first()
+    if customer:
+     duplicates+=1
+     if due:
+      kind=str(value('task_type') or '고객약속').strip()
+      kind={'요금제':'요금제 변경','요금제변경':'요금제 변경','부가서비스':'부가서비스 해지'}.get(kind,kind)
+      if not CustomerTask.query.filter_by(customer_id=customer.id,due_date=due,task_type=kind).first():
+       db.session.add(CustomerTask(customer_id=customer.id,task_type=kind,title=f'{customer.name} · {kind}',due_date=due,description=str(value('memo') or '').strip(),status='처리예정'));db.session.flush();task_created+=1
+     continue
     customer_type=str(value('customer_type') or '기존손님').strip();customer_type=customer_type if customer_type in allowed_types else '기존손님'
     carrier=str(value('carrier') or '').strip().upper().replace('SKT','SK').replace('LGU+','LG').replace('LG U+','LG');carrier=carrier if carrier in {'SK','KT','LG'} else ''
     road=str(value('address_road') or '').strip();jibun=str(value('address_jibun') or '').strip();detail=str(value('address_detail') or '').strip();address_key='|'.join([road,jibun,detail]).lower().replace(' ','') if road or jibun else ''
     consent=normalize_excel_header(value('marketing_consent')) in {normalize_excel_header(x) for x in consent_values}
-    db.session.add(Customer(name=name,phone=phone,carrier=carrier,status='상담중',customer_type=customer_type,address_road=road,address_jibun=jibun,address_detail=detail,address_key=address_key,hobbies=str(value('hobbies') or '').strip(),interests=str(value('interests') or '').strip(),memo=str(value('memo') or '').strip(),branch_id=row_branch.id,company_code=current_company(),marketing_consent=consent,marketing_consent_at=datetime.utcnow() if consent else None));seen.add(phone);created+=1
+    customer=Customer(name=name,phone=phone,carrier=carrier,status='상담중',customer_type=customer_type,address_road=road,address_jibun=jibun,address_detail=detail,address_key=address_key,hobbies=str(value('hobbies') or '').strip(),interests=str(value('interests') or '').strip(),memo=str(value('memo') or '').strip(),branch_id=row_branch.id,company_code=current_company(),marketing_consent=consent,marketing_consent_at=datetime.utcnow() if consent else None);db.session.add(customer);db.session.flush();seen.add(phone);created+=1
+    if due:
+     kind=str(value('task_type') or '고객약속').strip()
+     kind={'요금제':'요금제 변경','요금제변경':'요금제 변경','부가서비스':'부가서비스 해지'}.get(kind,kind)
+     db.session.add(CustomerTask(customer_id=customer.id,task_type=kind,title=f'{name} · {kind}',due_date=due,description=str(value('memo') or '').strip(),status='처리예정'));db.session.flush();task_created+=1
   if not recognized:raise ValueError('required headers missing')
-  if not created:db.session.rollback();flash(f'등록된 고객이 없습니다. 중복 {duplicates}건, 오류·지점미지정 {invalid}건','error');return redirect(url_for('customers'))
-  audit('고객 엑셀 일괄등록','customer','',f'{secure_filename(upload.filename)} / 등록 {created}명 / 중복 {duplicates}명 / 제외 {invalid}명');db.session.commit();flash(f'고객 등록 완료: 신규 {created}명, 중복 {duplicates}명, 제외 {invalid}명','success')
+  if not created and not task_created:db.session.rollback();flash(f'등록된 고객이 없습니다. 중복 {duplicates}건, 오류·지점미지정 {invalid}건','error');return redirect(url_for('customers'))
+  audit('고객 엑셀 일괄등록','customer','',f'{secure_filename(upload.filename)} / 등록 {created}명 / 중복 {duplicates}명 / 제외 {invalid}명');db.session.commit();flash(f'고객 등록 완료: 신규 {created}명, 중복 {duplicates}명, 제외 {invalid}명 · 고객약속 {task_created}건 (날짜·연락처·지점 확인)','success')
  except Exception:
   db.session.rollback();flash('고객 엑셀을 읽지 못했습니다. 고객명·휴대전화 열과 지점을 확인해주세요.','error')
  return redirect(url_for('customers'))
@@ -2706,7 +2737,7 @@ def manager_portal():
  if u.role=='admin':users=User.query.filter_by(company_code=current_company()).order_by(User.id).all()
  elif u.role=='manager':users=User.query.filter_by(company_code=current_company(),branch_id=u.branch_id).order_by(User.id).all()
  routes={'customers':'customers','sales':'sales','documents':'sales','inventory':'inventory','paybacks':'paybacks','tasks':'manager_tasks','wired':'wired_sales','cash':'cash_ledger','legal':'legal_cases','partners':'partners','branches':'branches','tools':'date_calculator'}
- return render_template('manager_portal.html',u=u,branch=branch,users=users,routes=routes,rules=permissions(u))
+ return render_template('manager_portal.html',u=u,branch=branch,users=users,routes=routes,rules=permissions(u),home_work=home_work())
 
 @app.route('/my-account',methods=['GET','POST'])
 @login_required

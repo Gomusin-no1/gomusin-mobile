@@ -1,5 +1,6 @@
 {% extends 'base.html' %}{% block title %}내 매장 관리 · TrustMap{% endblock %}{% block page_title %}{{'전체 매장 관리' if u.role=='admin' else '내 매장 관리'}}{% endblock %}
 {% block content %}<div class="manager-wrap">
+{% include '_home_work.html' %}
 <header class="manager-banner"><span class="manager-dot"></span><div><p>{{branch.name if branch else 'TrustMap'}} · {{role_label(u.role)}}</p><h2>{{u.display_name or u.username}}님의 관리 페이지입니다.</h2></div><span class="manager-status">{{'전체 매장' if u.role=='admin' else '소속 매장 전용'}}</span></header>
 <section class="panel manager-intro"><div class="manager-emblem"><span>TrustMap</span><strong>{{(u.display_name or u.username)[0]}}</strong><small>{{u.job_title or role_label(u.role)}}</small></div><div class="manager-actions">
 <a href="{{url_for('my_account')}}"><b>회원정보 변경 <span>↗</span></b><small>내 이름과 연락처를 확인하고 수정합니다.</small></a>
