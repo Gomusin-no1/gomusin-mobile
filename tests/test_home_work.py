@@ -94,3 +94,22 @@ class HomeWorkTest(unittest.TestCase):
   with app.app_context():
    self.assertEqual(0,CustomerTask.query.count())
    self.assertIsNone(Customer.query.filter_by(phone='01098765432').first())
+
+ def test_import_explains_missing_date_and_invalid_rows_without_personal_data(self):
+  import io
+  from openpyxl import Workbook
+  self.login_as_a();book=Workbook();sheet=book.active;sheet.title='예약목록'
+  sheet.append(['고객명','휴대폰번호','예약일','처리항목'])
+  sheet.append(['민감이름','01099887766','','요금제'])
+  sheet.append(['날짜오류','01099887765','2026-02-30','요금제'])
+  sheet.append([None,None,None,None])
+  sheet.append(['정상고객','01099887764','2026-09-28','요금제'])
+  stream=io.BytesIO();book.save(stream);stream.seek(0)
+  response=self.client.post('/customers/import',data={'branch_id':str(self.a_branch),'file':(stream,'appointments.xlsx')})
+  self.assertEqual(302,response.status_code)
+  with self.client.session_transaction() as sess:
+   messages=' '.join(text for category,text in sess.get('_flashes',[]))
+  self.assertIn('예약목록 2행',messages);self.assertIn('예약일이 없음',messages)
+  self.assertIn('예약목록 3행',messages);self.assertIn('예약일 오류',messages)
+  self.assertIn('제외 2명',messages);self.assertNotIn('민감이름',messages);self.assertNotIn('01099887766',messages)
+  with app.app_context():self.assertEqual(1,CustomerTask.query.count())
