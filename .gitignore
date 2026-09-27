@@ -3,3 +3,7 @@ __pycache__/
 .venv/
 .deps/
 instance/
+.env
+.env.*
+*.dump
+*.backup

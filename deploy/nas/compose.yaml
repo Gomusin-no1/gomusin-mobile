@@ -1,0 +1,43 @@
+# Run from repository root: docker compose --env-file .env.nas -f deploy/nas/compose.yaml ...
+services:
+  db:
+    image: ${POSTGRES_IMAGE:?Set postgres image matching the source database major version}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: trustmap
+      POSTGRES_USER: trustmap
+      POSTGRES_PASSWORD: ${NAS_DB_PASSWORD:?Set a unique database password}
+      TZ: Asia/Seoul
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trustmap -d trustmap"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/nas/Dockerfile
+    restart: unless-stopped
+    env_file: ../../.env.nas
+    environment:
+      DATABASE_URL: ${NAS_DATABASE_URL:?Set postgresql+psycopg URL using the db hostname}
+      SECRET_KEY: ${SECRET_KEY:?Preserve the production secret securely}
+      COOKIE_SECURE: 'true'
+      TZ: Asia/Seoul
+    ports:
+      - '127.0.0.1:18080:8000'
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - app_data:/app/instance
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/login', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+volumes:
+  db_data:
+  app_data:
