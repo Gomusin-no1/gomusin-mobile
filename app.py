@@ -1483,25 +1483,34 @@ def customers_import():
  if default_branch and not branch:abort(403)
  try:
   from openpyxl import load_workbook
-  book=load_workbook(upload,read_only=True,data_only=True);created=duplicates=invalid=task_created=0;seen=set();recognized=False
-  branches={normalize_excel_header(x.name):x for x in Branch.query.filter_by(active=True).all()};existing={normalize_phone(x[0]) for x in db.session.query(Customer.phone).filter(Customer.phone.isnot(None)).all() if x[0]}
+  book=load_workbook(upload,read_only=True,data_only=True);created=duplicates=invalid=task_created=0;recognized=False;row_errors=[]
+  branches={normalize_excel_header(x.name):x for x in Branch.query.filter_by(active=True).all()}
   consent_values={'동의','예','yes','y','true','1','수신동의','o'};allowed_types={'로드손님','성지손님','기존손님'}
   for sheet in book.worksheets:
    rows=sheet.iter_rows(values_only=True);header=next(rows,None);positions=customer_header_positions(header)
-   if not {'name','phone'}.issubset(positions):continue
+   if not {'name','phone'}.issubset(positions):
+    if len(row_errors)<8:row_errors.append(f'{sheet.title[:30]}: 고객명·휴대전화 제목 열을 찾지 못해 시트 제외')
+    continue
    recognized=True
-   for row in rows:
+   for row_number,row in enumerate(rows,start=2):
+    if not any(v is not None and str(v).strip() for v in row):continue
+    def reject(reason):
+     nonlocal invalid
+     invalid+=1
+     if len(row_errors)<8:row_errors.append(f'{sheet.title[:30]} {row_number}행: {reason}')
     def value(key):
      index=positions.get(key);return row[index] if index is not None and index<len(row) else None
     name=str(value('name') or '').strip();phone=normalize_excel_phone(value('phone'))
-    if not name or len(phone)<10:invalid+=1;continue
+    if not name:reject('고객명 누락');continue
+    if len(phone) not in (10,11):reject('연락처는 숫자 10~11자리 필요');continue
     row_branch=branches.get(normalize_excel_header(value('branch'))) if value('branch') else branch
-    if not row_branch:invalid+=1;continue
+    if not row_branch:reject('지점명이 등록된 매장과 일치하지 않음');continue
     due=None
+    if value('task_type') and not value('reservation_date'):reject('처리항목은 있지만 예약일이 없음');continue
     if value('reservation_date'):
      raw_due=value('reservation_date')
      due=raw_due.date() if isinstance(raw_due,datetime) else (raw_due if isinstance(raw_due,date) else parse_date(str(raw_due).strip()))
-     if not due:invalid+=1;continue
+     if not due:reject('예약일 오류: 2026-09-27 형식 또는 엑셀 날짜 셀 사용');continue
     customer=Customer.query.filter_by(company_code=current_company(),branch_id=row_branch.id,phone=phone).first()
     if customer:
      duplicates+=1
@@ -1515,14 +1524,15 @@ def customers_import():
     carrier=str(value('carrier') or '').strip().upper().replace('SKT','SK').replace('LGU+','LG').replace('LG U+','LG');carrier=carrier if carrier in {'SK','KT','LG'} else ''
     road=str(value('address_road') or '').strip();jibun=str(value('address_jibun') or '').strip();detail=str(value('address_detail') or '').strip();address_key='|'.join([road,jibun,detail]).lower().replace(' ','') if road or jibun else ''
     consent=normalize_excel_header(value('marketing_consent')) in {normalize_excel_header(x) for x in consent_values}
-    customer=Customer(name=name,phone=phone,carrier=carrier,status='상담중',customer_type=customer_type,address_road=road,address_jibun=jibun,address_detail=detail,address_key=address_key,hobbies=str(value('hobbies') or '').strip(),interests=str(value('interests') or '').strip(),memo=str(value('memo') or '').strip(),branch_id=row_branch.id,company_code=current_company(),marketing_consent=consent,marketing_consent_at=datetime.utcnow() if consent else None);db.session.add(customer);db.session.flush();seen.add(phone);created+=1
+    customer=Customer(name=name,phone=phone,carrier=carrier,status='상담중',customer_type=customer_type,address_road=road,address_jibun=jibun,address_detail=detail,address_key=address_key,hobbies=str(value('hobbies') or '').strip(),interests=str(value('interests') or '').strip(),memo=str(value('memo') or '').strip(),branch_id=row_branch.id,company_code=current_company(),marketing_consent=consent,marketing_consent_at=datetime.utcnow() if consent else None);db.session.add(customer);db.session.flush();created+=1
     if due:
      kind=str(value('task_type') or '고객약속').strip()
      kind={'요금제':'요금제 변경','요금제변경':'요금제 변경','부가서비스':'부가서비스 해지'}.get(kind,kind)
      db.session.add(CustomerTask(customer_id=customer.id,task_type=kind,title=f'{name} · {kind}',due_date=due,description=str(value('memo') or '').strip(),status='처리예정'));db.session.flush();task_created+=1
+  if row_errors:flash('엑셀 확인 필요 (최대 8개 표시): ' + ' / '.join(row_errors),'error')
   if not recognized:raise ValueError('required headers missing')
   if not created and not task_created:db.session.rollback();flash(f'등록된 고객이 없습니다. 중복 {duplicates}건, 오류·지점미지정 {invalid}건','error');return redirect(url_for('customers'))
-  audit('고객 엑셀 일괄등록','customer','',f'{secure_filename(upload.filename)} / 등록 {created}명 / 중복 {duplicates}명 / 제외 {invalid}명');db.session.commit();flash(f'고객 등록 완료: 신규 {created}명, 중복 {duplicates}명, 제외 {invalid}명 · 고객약속 {task_created}건 (날짜·연락처·지점 확인)','success')
+  audit('고객 엑셀 일괄등록','customer','',f'{secure_filename(upload.filename)} / 등록 {created}명 / 중복 {duplicates}명 / 제외 {invalid}명 / 고객약속 {task_created}건');db.session.commit();flash(f'고객 등록 완료: 신규 {created}명, 중복 {duplicates}명, 제외 {invalid}명 · 고객약속 {task_created}건 (날짜·연락처·지점 확인)','success')
  except Exception:
   db.session.rollback();flash('고객 엑셀을 읽지 못했습니다. 고객명·휴대전화 열과 지점을 확인해주세요.','error')
  return redirect(url_for('customers'))
