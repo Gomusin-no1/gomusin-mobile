@@ -63,3 +63,34 @@ class HomeWorkTest(unittest.TestCase):
    self.assertEqual(date(2026,9,27),CustomerTask.query.first().due_date)
   html=self.client.get('/').data.decode()
   self.assertIn('A 고객 · 요금제 변경',html)
+
+ @patch('app.business_today',return_value=date(2026,9,27))
+ def test_task_filters_and_pagination_preserve_all_records(self,_):
+  self.seed();self.login_as_a()
+  with app.app_context():
+   own=Customer.query.filter_by(company_code='company-a').first()
+   for i in range(205):
+    db.session.add(CustomerTask(customer_id=own.id,title=f'페이지약속{i:03}',task_type='고객약속',due_date=date(2026,9,28),status='처리예정'))
+   db.session.add(CustomerTask(customer_id=own.id,title='완료확인약속',task_type='고객약속',due_date=date(2026,9,27),status='완료'))
+   db.session.commit()
+  html=self.client.get('/my-tasks').data.decode()
+  self.assertIn('오늘요금제예약',html);self.assertNotIn('이전약속0',html);self.assertNotIn('완료확인약속',html)
+  html=self.client.get('/my-tasks?view=upcoming&page=5').data.decode()
+  self.assertIn('페이지약속204',html);self.assertIn('205건',html);self.assertNotIn('타회사비밀예약',html)
+  html=self.client.get('/my-tasks?view=completed&date=2026-09-27').data.decode()
+  self.assertIn('완료확인약속',html);self.assertNotIn('오늘요금제예약',html)
+  html=self.client.get('/my-tasks?view=overdue').data.decode()
+  self.assertIn('이전약속0',html);self.assertNotIn('오늘요금제예약',html)
+
+ def test_unknown_excel_branch_is_not_silently_reassigned(self):
+  import io
+  from openpyxl import Workbook
+  self.login_as_a();book=Workbook();sheet=book.active
+  sheet.append(['고객명','휴대폰번호','예약일','처리항목','처리점'])
+  sheet.append(['지점오류고객','01098765432','2026-09-27','요금제','잘못된지점'])
+  stream=io.BytesIO();book.save(stream);stream.seek(0)
+  response=self.client.post('/customers/import',data={'branch_id':str(self.a_branch),'file':(stream,'appointments.xlsx')})
+  self.assertEqual(302,response.status_code)
+  with app.app_context():
+   self.assertEqual(0,CustomerTask.query.count())
+   self.assertIsNone(Customer.query.filter_by(phone='01098765432').first())

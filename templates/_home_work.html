@@ -1,9 +1,9 @@
 {% if home_work %}
 <section class="panel" id="home-today-work" aria-labelledby="home-work-title">
-<div class="panel-title"><div><h2 id="home-work-title">오늘 처리할 일</h2><span>{{home_work.today.strftime('%m월 %d일')}} · 한국시간 기준</span></div><a class="btn small" href="{{url_for('manager_tasks')}}">전체 고객약속 보기</a></div>
+<div class="panel-title"><div><h2 id="home-work-title">오늘 처리할 일</h2><span>{{home_work.today.strftime('%m월 %d일')}} · 한국시간 기준</span></div><a class="btn small" href="{{url_for('manager_tasks',view='all')}}">전체 고객약속 보기</a></div>
 <p><b>고객약속 {{home_work.tasks|length}}건</b> · 방문예약 {{home_work.bookings|length}}건 · 기한 지난 미처리 {{home_work.overdue}}건</p>
 <div class="task-list">{% for t in home_work.tasks %}<article class="task-card"><div class="task-main"><div class="task-top"><span class="due-badge">오늘</span><span class="tag">{{t.task_type}}</span><span class="status">{{t.status}}</span></div><b>{{t.title}}</b><small>{{t.description or '상세내용 없음'}} · 담당 {{t.assigned_staff or '미지정'}}</small></div>{% if access_link('task_edit') %}<a class="btn small" href="{{url_for('task_edit',task_id=t.id)}}">약속 확인 · 처리</a>{% endif %}</article>{% else %}<p class="empty">오늘 처리할 고객약속이 없습니다.</p>{% endfor %}</div>
 {% if home_work.bookings %}<h3>오늘 방문예약</h3><div class="task-list">{% for booking in home_work.bookings %}<article class="task-card"><div><span class="tag">{{booking.visit_date[11:16] or '시간 미정'}}</span><b>{{booking.name}}</b><small>담당 {{booking.assigned_staff or '미지정'}}</small></div><a class="btn small" href="{{url_for('bookings',date=home_work.today.isoformat())}}">예약 확인</a></article>{% endfor %}</div>{% endif %}
-{% if home_work.overdue %}<p><a class="btn small" href="{{url_for('manager_tasks')}}">기한 지난 고객약속 {{home_work.overdue}}건 확인</a></p>{% endif %}
+{% if home_work.overdue %}<p><a class="btn small" href="{{url_for('manager_tasks',view='overdue')}}">기한 지난 고객약속 {{home_work.overdue}}건 확인</a></p>{% endif %}
 </section>
 {% endif %}
