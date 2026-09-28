@@ -38,3 +38,5 @@ NAS에서 `trustmap-nas:preflight` 빌드와 의존성 import, `trustmap-nas:mig
 복원 컨테이너는 일회성이다. 성공 후 정지되는 것이 정상이다. 기존 복원본은 덮어쓰지 않는다. `Dockerfile.migration`에서 ca-certificates를 설치해야 하며 인증서 검증을 해제하지 않는다. `verify-stage.py`는 새 계정이나 실제 이메일을 만들지 않고 비공개 앱 상태를 검사한다.
 
 2026-09-28 NAS 앱 기본 검사 통과: /health 200(57ms), /login 200(245ms), /signup 200(152ms), 미로그인 /customers·/manager는 /login으로 302. Flask test client 내부 측정으로 외부 접속 지연을 의미하지 않는다. 테스트 발송/계정 생성 없음.
+
+NAS 회귀 검사: 105개 중 104개 통과, 비공개 원본이 필요한 1개 제외, 31.024초. 운영 DB 연결 없이 network_mode=none 및 메모리 SQLite로 실행. 외부 fild.synology.me HTTPS는 인증서 신뢰 오류가 발생했고 DSM에는 해당 도메인 인증서가 없었다. 새 인증서 발급 화면만 준비했으며 아직 발급/외부 앱 공개/운영 도메인 변경은 하지 않았다.
