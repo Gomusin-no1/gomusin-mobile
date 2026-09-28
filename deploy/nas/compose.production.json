@@ -1,0 +1,74 @@
+{
+  "services": {
+    "db": {
+      "image": "postgres:17",
+      "restart": "unless-stopped",
+      "env_file": [
+        "db.env"
+      ],
+      "volumes": [
+        "db_data:/var/lib/postgresql/data"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "pg_isready -U trustmap -d trustmap"
+        ],
+        "interval": "10s",
+        "timeout": "5s",
+        "retries": 12
+      }
+    },
+    "web": {
+      "image": "trustmap-nas:preflight",
+      "restart": "unless-stopped",
+      "env_file": [
+        "app-stage.env"
+      ],
+      "depends_on": {
+        "db": {
+          "condition": "service_healthy"
+        }
+      },
+      "ports": [
+        "127.0.0.1:18080:8000"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=5)"
+        ],
+        "interval": "30s",
+        "timeout": "10s",
+        "retries": 3,
+        "start_period": "30s"
+      }
+    },
+    "backup": {
+      "image": "postgres:17",
+      "restart": "unless-stopped",
+      "env_file": [
+        "db.env"
+      ],
+      "depends_on": {
+        "db": {
+          "condition": "service_healthy"
+        }
+      },
+      "volumes": [
+        "./backup-loop.sh:/backup-loop.sh:ro",
+        "backup_data:/backup"
+      ],
+      "command": [
+        "sh",
+        "/backup-loop.sh"
+      ]
+    }
+  },
+  "volumes": {
+    "db_data": {},
+    "backup_data": {}
+  }
+}
