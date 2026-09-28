@@ -40,3 +40,6 @@ NAS에서 `trustmap-nas:preflight` 빌드와 의존성 import, `trustmap-nas:mig
 2026-09-28 NAS 앱 기본 검사 통과: /health 200(57ms), /login 200(245ms), /signup 200(152ms), 미로그인 /customers·/manager는 /login으로 302. Flask test client 내부 측정으로 외부 접속 지연을 의미하지 않는다. 테스트 발송/계정 생성 없음.
 
 NAS 회귀 검사: 105개 중 104개 통과, 비공개 원본이 필요한 1개 제외, 31.024초. 운영 DB 연결 없이 network_mode=none 및 메모리 SQLite로 실행. 외부 fild.synology.me HTTPS는 인증서 신뢰 오류가 발생했고 DSM에는 해당 도메인 인증서가 없었다. 새 인증서 발급 화면만 준비했으며 아직 발급/외부 앱 공개/운영 도메인 변경은 하지 않았다.
+
+2026-09-28 NAS DDNS(fild.synology.me) 인증서 발급 성공: 만료 2026-12-27. 대표 승인 이메일로 발급했으며 trustflow.co.kr 운영 인증서와는 별개다.
+NAS 시스템 기본 웹 인증서에 fild.synology.me 적용 후 외부 HTTPS 접속이 인증서 오류 없이 Synology Web Station 기본 페이지를 반환함을 확인했다. 아직 TrustMap 역방향 프록시와 운영 DNS 전환은 적용하지 않았다.
