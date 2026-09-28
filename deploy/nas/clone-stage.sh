@@ -9,7 +9,7 @@ export PGCONNECT_TIMEOUT=20
 : "${SOURCE_PASSWORD:?SOURCE_PASSWORD is required}"
 : "${TARGET_PASSWORD:?TARGET_PASSWORD is required}"
 # Preserve interrupted backups for inspection instead of overwriting them.
-if [ -e /backup/source.dump ] || [ -e /backup/source.dump.partial ]; then
+if [ -e /backup/source-tls.dump ] || [ -e /backup/source-tls.dump.partial ]; then
   echo 'REFUSED: backup or interrupted backup already exists'
   exit 1
 fi
@@ -29,12 +29,12 @@ target_db
 tables=$(psql -XAt -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM pg_tables WHERE schemaname='public'")
 if [ "$tables" != 0 ]; then echo 'REFUSED: target database is not empty'; exit 1; fi
 source_db
-pg_dump --format=custom --no-owner --no-acl --file=/backup/source.dump.partial
-mv /backup/source.dump.partial /backup/source.dump
-sha256sum /backup/source.dump > /backup/source.dump.sha256
+pg_dump --format=custom --no-owner --no-acl --file=/backup/source-tls.dump.partial
+mv /backup/source-tls.dump.partial /backup/source-tls.dump
+sha256sum /backup/source-tls.dump > /backup/source-tls.dump.sha256
 echo 'SOURCE_BACKUP_OK'
 target_db
-pg_restore --dbname=trustmap --no-owner --no-acl --exit-on-error --single-transaction /backup/source.dump
+pg_restore --dbname=trustmap --no-owner --no-acl --exit-on-error --single-transaction /backup/source-tls.dump
 echo 'NAS_RESTORE_OK'
 psql -XAt -v ON_ERROR_STOP=1 -c "SELECT format('SELECT %L, count(*) FROM %I.%I;', tablename, schemaname, tablename) FROM pg_tables WHERE schemaname='public' ORDER BY tablename" > /backup/counts.sql
 psql -XAt -v ON_ERROR_STOP=1 -f /backup/counts.sql > /backup/target-counts.txt
