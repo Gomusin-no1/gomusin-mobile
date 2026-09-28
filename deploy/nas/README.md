@@ -36,3 +36,5 @@ ADMIN_USERNAME/ADMIN_PASSWORD로 기존 계정을 새로 덮어쓰지 않는다.
 NAS에서 `trustmap-nas:preflight` 빌드와 의존성 import, `trustmap-nas:migration` 인증서 포함 빌드 및 TLS verify-full 연결 검증 완료. 고객 1,036 / 고객 일정 1,172 / 재고 592 / 계정 4건의 복사본을 포함하여 전체 테이블 건수 일치. 이는 특정 시점 복사본이며 운영 전환 전 최종 동기화가 필요하다.
 
 복원 컨테이너는 일회성이다. 성공 후 정지되는 것이 정상이다. 기존 복원본은 덮어쓰지 않는다. `Dockerfile.migration`에서 ca-certificates를 설치해야 하며 인증서 검증을 해제하지 않는다. `verify-stage.py`는 새 계정이나 실제 이메일을 만들지 않고 비공개 앱 상태를 검사한다.
+
+2026-09-28 NAS 앱 기본 검사 통과: /health 200(57ms), /login 200(245ms), /signup 200(152ms), 미로그인 /customers·/manager는 /login으로 302. Flask test client 내부 측정으로 외부 접속 지연을 의미하지 않는다. 테스트 발송/계정 생성 없음.
