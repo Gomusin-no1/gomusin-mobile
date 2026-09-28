@@ -1,6 +1,6 @@
 # TrustMap Synology NAS 이전 준비
 
-상태: 실행 구성 초안. NAS 설치·데이터 복원·도메인 전환은 아직 수행하지 않음.
+상태(2026-09-28): DS923+에서 앱 이미지 빌드, PostgreSQL 17 최신 운영 DB 복원, 전체 테이블 건수 일치 확인. 외부 HTTPS·도메인 전환은 아직 수행하지 않음.
 
 ## 설치 전 확인
 - NAS 모델/CPU/메모리, DSM 버전 및 Container Manager 지원 확인.
@@ -33,4 +33,6 @@ ADMIN_USERNAME/ADMIN_PASSWORD로 기존 계정을 새로 덮어쓰지 않는다.
 - NAS 자동 백업 및 별도 장치/위치 복구 테스트 후 유료 서비스 해지 여부를 결정한다.
 
 ## 검증 범위
-현재 환경에는 Docker가 없어 이미지 빌드/Compose 실제 실행은 검증 전이다. NAS 접속 후 실제 검증 필수.
+NAS에서 `trustmap-nas:preflight` 빌드와 의존성 import, `trustmap-nas:migration` 인증서 포함 빌드 및 TLS verify-full 연결 검증 완료. 고객 1,036 / 고객 일정 1,172 / 재고 592 / 계정 4건의 복사본을 포함하여 전체 테이블 건수 일치. 이는 특정 시점 복사본이며 운영 전환 전 최종 동기화가 필요하다.
+
+복원 컨테이너는 일회성이다. 성공 후 정지되는 것이 정상이다. 기존 복원본은 덮어쓰지 않는다. `Dockerfile.migration`에서 ca-certificates를 설치해야 하며 인증서 검증을 해제하지 않는다. `verify-stage.py`는 새 계정이나 실제 이메일을 만들지 않고 비공개 앱 상태를 검사한다.
