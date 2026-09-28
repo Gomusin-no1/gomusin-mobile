@@ -7,4 +7,4 @@ COPY --chown=trustmap:trustmap . .
 RUN mkdir -p /app/instance && chown trustmap:trustmap /app/instance
 USER trustmap
 EXPOSE 8000
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "1", "--threads", "4", "--timeout", "90", "--access-logfile", "-", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "1", "--threads", "4", "--timeout", "90", "--access-logfile", "-", "nas_wsgi:application"]

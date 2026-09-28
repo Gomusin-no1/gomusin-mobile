@@ -43,3 +43,9 @@ NAS 회귀 검사: 105개 중 104개 통과, 비공개 원본이 필요한 1개 
 
 2026-09-28 NAS DDNS(fild.synology.me) 인증서 발급 성공: 만료 2026-12-27. 대표 승인 이메일로 발급했으며 trustflow.co.kr 운영 인증서와는 별개다.
 NAS 시스템 기본 웹 인증서에 fild.synology.me 적용 후 외부 HTTPS 접속이 인증서 오류 없이 Synology Web Station 기본 페이지를 반환함을 확인했다. 아직 TrustMap 역방향 프록시와 운영 DNS 전환은 적용하지 않았다.
+
+2026-09-28 23:33 KST: NAS reverse proxy HTTPS fild.synology.me:443 -> HTTP 127.0.0.1:18080 saved. Its certificate service assignment now uses fild.synology.me. External browser /login successfully renders TrustMap login after the prior certificate error. This is staging only; mail remains disabled and production DNS unchanged. Cafe24 authenticated access confirmed; apex A record remains 216.24.57.1. Final data synchronization, production-domain TLS and mail configuration remain cutover gates.
+
+Cutover maintenance gate: set TRUSTMAP_MAINTENANCE=true on the retiring server only during final synchronization. All application requests receive 503/no-store without entering Flask or writing to the database; GET/HEAD /health reports maintenance without database initialization. NAS may instead use TRUSTMAP_MAINTENANCE_FILE pointing to a private marker file. Default is disabled. Four isolated tests verify the gate. The gate must be deployed and verified before source backup; this commit alone does not freeze production.
+
+Use gunicorn nas_wsgi:application for this gate. The NAS Dockerfile uses this entry point. The existing Render app:app entry point is unchanged until explicitly updated for cutover.
