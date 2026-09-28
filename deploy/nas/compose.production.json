@@ -65,6 +65,20 @@
         "sh",
         "/backup-loop.sh"
       ]
+    },
+    "https-redirect": {
+      "image": "trustmap-nas:preflight",
+      "restart": "unless-stopped",
+      "ports": [
+        "127.0.0.1:18081:8080"
+      ],
+      "volumes": [
+        "./https_redirect.py:/redirect/https_redirect.py:ro"
+      ],
+      "command": [
+        "python",
+        "/redirect/https_redirect.py"
+      ]
     }
   },
   "volumes": {
