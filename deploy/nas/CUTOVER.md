@@ -12,7 +12,9 @@
 - Anonymous /customers and /manager returned 302 to /login.
 - No test email sent and no production test account created. Actual post-migration staff mail delivery not independently verified.
 - DSM managed renewal certificate issuance submitted; final issuance/binding still needs verification. Existing imported certificate remains valid through 2026-12-27.
-- Plain HTTP currently returns Synology default page; HTTPS is the verified production entry point. Add host-scoped HTTPS redirect before claiming all entry paths complete.
+- Added isolated https-redirect service (no app env or DB) on loopback 18081. Both apex and www HTTP reverse proxies return 308 to https://trustflow.co.kr preserving path/query; verified /signup for both. HTTPS /signup still returns 200 with valid TLS.
+- DSM managed-renewal request did not produce a new certificate after reload. Existing valid imported certificate remains active. Automatic renewal is NOT verified; resolve before 2026-12-27. Do not repeatedly reissue certificates or weaken certificate checks.
+- Existing hourly mail-check automation was already disabled; its reference prompt was updated for NAS cutover while preserving disabled state. No continuous monitoring is currently promised.
 
 ## Recovery precautions
 Do not simply resume old Render after NAS accepts writes: synchronize newer NAS data first. Never delete original source database, staging database or final backup during stabilization. Old one-off clone containers refuse existing databases/backups; their refusal is expected on project rebuild, not a web-service failure.
