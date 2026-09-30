@@ -1,0 +1,159 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'; form-action 'none'"><title>고무신모바일 | 통신사별 가입 접수서</title><style>
+*{box-sizing:border-box}body{margin:0;background:#f3f5f8;color:#15263e;font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif;font-size:14px}header{background:#15263e;color:white;padding:30px max(24px,calc((100vw - 1080px)/2))}header small{color:#ffdc4a;letter-spacing:2px}h1{font-size:28px;margin:10px 0}header p{color:#c5d1e1;line-height:1.7;margin:8px 0}main{max-width:1080px;margin:22px auto;padding:0 18px 50px}.bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:18px}button,.file{border:1px solid #cbd4df;background:white;color:#15263e;padding:12px 18px;border-radius:9px;font:inherit;cursor:pointer}.primary{background:#15263e;color:white}.carrier{font-weight:bold;min-width:120px}.carrier.active{background:#ffda47;border-color:#ffda47}.card{background:white;border:1px solid #dde3eb;border-radius:14px;margin:16px 0;padding:22px}h2{font-size:18px;margin:0 0 20px}h2 b{color:#8090a6;font-size:13px;margin-right:10px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:17px}label{display:block;color:#526176;font-size:12px;font-weight:600}input,select,textarea{width:100%;padding:11px;border:1px solid #cbd4df;border-radius:7px;background:white;color:#15263e;font:14px 'Malgun Gothic',sans-serif;margin-top:7px;min-width:0}input:focus,select:focus,textarea:focus{outline:2px solid #aec7ef}input[readonly]{background:#f1f5fa}.span2{grid-column:span 2}.span3{grid-column:span 3}.radio{display:flex;gap:20px;align-items:center;flex-wrap:wrap}.radio label{font-size:14px}.radio input{width:auto;margin-right:6px}.help{font-size:12px;color:#6b778a;line-height:1.7}.status{background:#fff5d8;color:#6d5100;border-radius:8px;padding:12px;line-height:1.6;margin:15px 0}.status.good{background:#eaf6ee;color:#236139}.totals{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.totals>div{background:#f1f5fa;border-radius:10px;padding:17px}.totals strong{display:block;font-size:24px;margin-top:10px}.warning{color:#b13b22}details summary{cursor:pointer;font-weight:bold}table{border-collapse:collapse;width:100%;font-size:12px;margin:14px 0}td,th{border-bottom:1px solid #dde3eb;text-align:left;padding:9px}#records{overflow:auto}.smallcheck{display:flex;align-items:center;gap:8px;font-size:13px}.smallcheck input{width:auto;margin:0}#printSheet{display:none}.footnote{font-size:12px;color:#788598;line-height:1.7}#bankFields[hidden]{display:none}#resultMessage{min-height:22px} @media(max-width:720px){.grid{grid-template-columns:1fr 1fr}.span3{grid-column:span 2}header{padding:24px}h1{font-size:23px}.totals{grid-template-columns:1fr}.totals strong{font-size:22px}}@media(max-width:420px){.grid{grid-template-columns:1fr}.span2,.span3{grid-column:span 1}}
+@page{size:A4;margin:12mm}@media print{body{background:white;font-size:10px}header,main{display:none!important}#printSheet{display:block}#printSheet h1{font-size:22px;margin:5px 0 8px}#printSheet h2{font-size:13px;margin:15px 0 5px;background:#eef2f6;padding:7px}#printSheet .pgrid{display:grid;grid-template-columns:1fr 1fr;gap:0;border-top:1px solid #a8b1bc;border-left:1px solid #a8b1bc}#printSheet .pcell{border-bottom:1px solid #a8b1bc;border-right:1px solid #a8b1bc;padding:7px 8px;min-height:32px;white-space:pre-wrap;overflow-wrap:anywhere}#printSheet .pcell b{display:inline-block;min-width:91px;font-weight:normal;color:#526176}#printSheet .full{grid-column:span 2}#printSheet p{line-height:1.5}#printSheet .sign{display:flex;justify-content:space-between;margin-top:22px;padding:12px;border:1px solid #a8b1bc}#printSheet .tiny{font-size:9px;color:#677181}#printSheet section{break-inside:avoid}}
+</style></head><body><header><small>GOMUSHIN MOBILE · TRUSTMAP</small><h1>통신사별 가입 접수서</h1><p>SKT · KT · LG U+ | 고객정보부터 지원금·할부·자동이체까지 한 번에 작성</p></header><main>
+<div class="bar" id="carrierButtons"><button class="carrier active" data-carrier="SKT" type="button">SKT</button><button class="carrier" data-carrier="KT" type="button">KT</button><button class="carrier" data-carrier="LG U+" type="button">LG U+</button><span class="help">선택한 통신사의 접수서로 인쇄됩니다.</span></div>
+<div class="status">매장 접수·조건 확인용 양식입니다. 실제 개통과 자동이체 신청은 해당 통신사의 공식 신청서·동의 절차로 완료하세요. 주민번호·자동이체 정보는 현재 화면에서만 사용됩니다. 판매일보로 옮기기를 누르면 고객명·연락처·판매 조건만 서버에 전달됩니다.</div>
+<p style="padding:12px"><a href="/sales">← 판매일보</a> · 접수서 작성 → T폼에서 개통 → 판매일보로 옮기기</p><form id="application" autocomplete="off">
+<section class="card"><h2><b>01</b>가입 · 유통망</h2><div class="grid">
+<label>가입 통신사<select id="carrier"><option>SKT</option><option>KT</option><option>LG U+</option></select></label>
+<label>가입 유형<select id="joinType"><option>번호이동</option><option>기기변경</option><option>신규가입</option></select></label>
+<label>접수일<input id="date" type="date"></label>
+<label>접수 매장<select id="branch"><option>부평본점</option><option>간석점</option><option>숭의점</option></select></label>
+<label>이통사 유통망 / 개통처<input id="network" placeholder="거래처·대리점명"></label>
+<label>담당자<input id="staff" placeholder="담당 직원 이름"></label>
+</div></section>
+<section class="card"><h2><b>02</b>고객 · 기존 회선</h2><div class="grid">
+<label>고객 이름<input id="name" maxlength="50"></label>
+<label>주민등록번호 앞 6자리<input id="rrnFront" type="password" inputmode="numeric" maxlength="6" placeholder="앞 6자리"></label>
+<label>주민등록번호 뒤 7자리<input id="rrnBack" type="password" inputmode="numeric" maxlength="7" placeholder="뒤 7자리"></label>
+<label>고객 연락처<input id="contact" type="tel" placeholder="010-0000-0000" maxlength="20"></label>
+<label>가입 / 개통 휴대폰번호<input id="newPhone" type="tel" placeholder="신규가입은 개통 후 기재" maxlength="20"></label>
+<label>이메일<input id="email" type="email" maxlength="100"></label>
+<label>기존 통신사<select id="oldCarrier"><option value="">선택</option><option>SKT</option><option>KT</option><option>LG U+</option><option>알뜰폰</option><option>없음</option></select></label>
+<label>기존 휴대폰번호<input id="oldPhone" type="tel" maxlength="20" placeholder="번호이동할 번호"></label>
+<label>기존 알뜰폰 사업자<input id="mvno" placeholder="해당 시 기재" maxlength="80"></label>
+<label class="span3">주소<input id="address" maxlength="160"></label>
+</div></section>
+<section class="card"><h2><b>03</b>단말 · 요금제 · 약정</h2><div class="grid">
+<label>모델명<input id="model" list="models" placeholder="모델명 또는 모델코드" maxlength="100"><datalist id="models"><option>갤럭시 S26</option><option>갤럭시 S26 울트라</option><option>갤럭시 S25 Edge</option><option>갤럭시 Z 플립8</option><option>갤럭시 Z 폴드8</option><option>아이폰17</option><option>아이폰18 Pro</option></datalist></label>
+<label>용량<input id="capacity" list="capacities" placeholder="256GB" maxlength="30"><datalist id="capacities"><option>128GB</option><option>256GB</option><option>512GB</option><option>1TB</option></datalist></label>
+<label>색상<input id="color" maxlength="50"></label>
+<label>가입 요금제<input id="plan" placeholder="정확한 요금제명" maxlength="100"></label>
+<label>약정 기간<select id="contract"><option value="24">24개월</option><option value="12">12개월</option></select></label>
+<label>월 기본요금 (원)<input id="monthlyFee" type="number" min="0" step="1"></label>
+<div class="span3 radio"><label><input type="radio" name="discount" value="subsidy" checked>통신사 지원금 (공시·공통지원금)</label><label><input type="radio" name="discount" value="select">선택약정 (요금할인)</label></div>
+</div><p class="help">공통지원금 출처 확인: <a href="https://www.smartchoice.or.kr/smc/mobile/dantongList.do" target="_blank" rel="noopener noreferrer">스마트초이스(KTOA) 공식 조회</a> · 현재 전 모델 자동수집은 연결되지 않았습니다. 등록한 기준표만 자동 입력됩니다.</p><div id="rateStatus" class="status" role="status">지원금 기준표가 없습니다. 확인된 기준 금액을 등록해주세요.</div>
+<div class="grid"><label>단말 출고가 (원)<input id="price" type="number" min="0" step="1" placeholder="기준표 또는 직접 확인"></label><label>통신사 지원금 (원)<input id="subsidy" type="number" min="0" step="1" placeholder="기준표 또는 직접 확인"></label><label>추가 / 유통망 지원금 (원)<input id="extra" type="number" min="0" step="1" value="0"></label><label>선납금 (원)<input id="upfront" type="number" min="0" step="1" value="0"></label><label>단말 대금 납부<select id="months"><option value="24">24개월 할부</option><option value="36">36개월 할부</option><option value="0">일시불</option></select></label><label>할부수수료 안내<input id="interestNote" maxlength="90" placeholder="통신사 확인 후 기재"></label></div>
+<p class="help">선택약정 선택 시 통신사 지원금은 0원 처리됩니다. 추가지원금은 별도로 입력합니다. 약정 기간과 단말 할부 기간은 서로 다릅니다.</p>
+<div class="totals"><div>단말 잔여 원금<strong id="principal">확인 필요</strong></div><div>월 할부원금 (수수료 제외)<strong id="monthly">확인 필요</strong></div><div>기준 금액 상태<strong id="priceState" style="font-size:17px">미확인</strong></div></div><p class="help">계산: 출고가 − 통신사 지원금 − 추가지원금 − 선납금. 월 할부원금은 잔여 원금 ÷ 개월 수로 산출한 참고값이며 실제 청구액은 수수료·원단위 정산에 따라 다릅니다.</p>
+</section>
+<section class="card"><h2><b>04</b>자동이체 · 납부</h2><div class="grid"><label>요금 납부 방법<select id="payment"><option>은행 자동이체</option><option>신용카드 자동납부</option><option>기존 납부방법 유지</option><option>기타</option></select></label><label>납부자 / 예금주<input id="payer" maxlength="50"></label><label>가입자와의 관계<input id="relation" placeholder="본인 / 배우자 / 부모 등" maxlength="30"></label><label>은행명<input id="bank" maxlength="40"></label><label>계좌번호<input id="account" type="password" inputmode="numeric" maxlength="30" placeholder="은행 자동이체 선택 시"></label><label>납부자 생년월일<input id="payerBirth" type="password" inputmode="numeric" maxlength="8" placeholder="통신사 공식 서식에 맞춰 기재"></label><label>카드사 (카드 납부 시)<input id="cardCompany" maxlength="40"></label><label class="span2">납부 관련 메모<input id="paymentNote" maxlength="120" placeholder="카드번호·CVC·비밀번호는 공식 신청 절차에서 입력"></label></div><p class="help">이 접수서 작성만으로 자동이체가 신청되지는 않습니다. 실제 출금 동의·명의 확인은 통신사 공식 절차에서 처리합니다.</p></section>
+<section class="card"><h2><b>05</b>추가 조건 · 확인</h2><div class="grid"><label>유심 / eSIM 비용 (원)<input id="simFee" type="number" min="0" step="1"></label><label>요금제 변경 예정일<input id="planDate" type="date"></label><label>부가서비스 해지 예정일<input id="addonDate" type="date"></label><label class="span3">부가서비스 · 사은품 · 기타 안내<textarea id="memo" rows="3" maxlength="350"></textarea></label></div><p class="help">최종 계약 조건·요금할인·지원금 반환 조건은 해당 통신사 공식 서류에서 확인하세요.</p></section>
+</form>
+<details class="card"><summary>출고가 · 지원금 기준표 등록 / 가져오기</summary><p class="help">상단에서 통신사·유통망·가입유형·모델·용량·요금제·약정기간을 정하고 출고가·지원금을 입력한 뒤 등록하세요. 출고가는 모델·용량·통신사별로 따로 등록할 수 있습니다. 10월 1일 변경표는 적용 시작일을 2026-10-01로 지정하면 해당 날짜부터 자동 선택됩니다. 같은 조건은 적용 시작일이 가장 최근인 기준이 우선합니다. 고객정보는 기준표 파일에 포함되지 않습니다.</p><div class="grid"><label>적용 시작일<input id="rateFrom" type="date"></label><label>적용 종료일<input id="rateTo" type="date"></label><label>확인 출처 / 기준표명<input id="rateSource" maxlength="180" placeholder="거래처 정책표 또는 공식 조회 출처"></label></div><div class="bar" style="margin-top:15px"><button id="addPrice" type="button">출고가만 등록</button><button id="addRate" type="button">현재 금액을 기준표에 등록</button><button id="exportRates" type="button">기준표 파일 저장</button><label class="file">기준표 가져오기<input id="importRates" type="file" accept=".json,application/json" style="max-width:240px"></label></div><p id="syncStatus" role="status">매장 공통 기준표 확인 중</p><button type="button" id="refreshCatalog">최신 등록 기준표 확인</button>{% if can_publish %}<button type="button" id="publishCatalog">이 기준표를 전 직원에게 적용</button>{% endif %}<div id="priceRecords"></div><div id="records"></div></details>
+<div class="card"><div class="bar"><label class="smallcheck"><input id="showSensitive" type="checkbox">입력한 주민번호·계좌번호 보기</label><label class="smallcheck"><input id="printSensitive" type="checkbox">이번 인쇄물에 주민번호·계좌번호 전체 포함</label></div><div class="bar"><button class="primary" id="print" type="button">선택 통신사 접수서 인쇄 / PDF 저장</button><button type="button" id="transferSale" class="primary">T폼 개통완료 · 판매일보로 옮기기</button><button id="clearCustomer" type="button">고객정보 비우기</button></div><p id="resultMessage" role="status"></p><p class="footnote">기본 인쇄는 주민번호 뒷자리·계좌번호를 가립니다. 필요한 경우에만 전체 포함을 선택하세요.<br>입력값은 새로고침·종료 시 사라집니다. 기준표는 고객정보 없이 별도 파일로 저장할 수 있습니다.<br>본 양식은 고무신모바일 매장 접수용이며 SKT·KT·LG U+의 공식 가입신청서 또는 개인정보·자동이체 동의서를 대체하지 않습니다.</p></div>
+</main><article id="printSheet"></article><script>
+/* Shared, deterministic catalogue matching. No sample prices or network access. */
+(function(root){
+'use strict';
+const norm=x=>String(x??'').normalize('NFKC').toLowerCase().replace(/[\s_-]+/g,'');
+const capacity=x=>norm(x).replace(/gb$/,'g').replace(/tb$/,'t');
+const day=x=>typeof x==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(x)&&!isNaN(Date.parse(x))&&new Date(x+'T00:00:00Z').toISOString().slice(0,10)===x;
+const money=x=>Number.isSafeInteger(x)&&x>=0&&x<=100000000;
+function valid(r,kind){
+ return r&&['SKT','KT','LG U+'].includes(r.carrier)&&['model','capacity','source','from','to'].every(k=>typeof r[k]==='string'&&r[k].trim()&&r[k].length<=200)&&day(r.from)&&day(r.to)&&r.from<=r.to&&
+ (kind==='price'?money(r.price):['network','joinType','plan','contract'].every(k=>typeof r[k]==='string'&&r[k].length<=200)&&['신규가입','번호이동','기기변경'].includes(r.joinType)&&['12','24'].includes(r.contract)&&r.plan.trim()&&money(r.subsidy)&&money(r.price)&&r.subsidy<=r.price);
+}
+function clean(r,kind){const keys=kind==='price'?['carrier','model','capacity','source','from','to','price']:['carrier','model','capacity','source','from','to','price','subsidy','network','joinType','plan','contract'];return Object.fromEntries(keys.map(k=>[k,r[k]]));}
+function decode(data){
+ if(!data||![1,2].includes(data.version)||!Array.isArray(data.rates)||data.rates.length>5000)throw Error('기준표 형식 오류');
+ const prices=data.version===2?data.prices:[];
+ if(!Array.isArray(prices)||prices.length>5000||!prices.every(r=>valid(r,'price'))||!data.rates.every(r=>valid(r,'rate')))throw Error('금액·기간·출처를 확인해주세요.');
+ return {version:2,prices:prices.map(r=>clean(r,'price')),rates:data.rates.map(r=>clean(r,'rate'))};
+}
+function latest(rows,field){if(!rows.length)return null;let from=rows.map(r=>r.from).sort().at(-1);let found=rows.filter(r=>r.from===from);if(new Set(found.map(r=>r[field])).size>1)return {conflict:true};return found[0];}
+function resolve(data,c){
+ const match=r=>r.carrier===c.carrier&&norm(r.model)===norm(c.model)&&capacity(r.capacity)===capacity(c.capacity)&&r.from<=c.date&&r.to>=c.date;
+ // Explicit device prices take precedence over prices attached to a subsidy row.
+ const explicit=data.prices.filter(match);const legacy=data.rates.filter(match);
+ const price=latest(explicit.length?explicit:legacy,'price');
+ const subsidy=latest(legacy.filter(r=>['network','joinType','plan','contract'].every(k=>norm(r[k])===norm(c[k]))),'subsidy');
+ return {price,subsidy};
+}
+const api={norm,capacity,valid,decode,resolve};if(typeof module==='object'&&module.exports)module.exports=api;else root.ReceptionPricing=api;
+})(typeof globalThis==='object'?globalThis:this);
+
+'use strict';
+const $=id=>document.getElementById(id);let rates=[],prices=[],matchedRate=null,matchedPrice=null;const contextIds=['carrier','network','joinType','model','capacity','plan','contract','date'];
+const value=id=>$(id).value.trim();const money=x=>Number(x).toLocaleString('ko-KR')+'원';const today=()=>{return new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())};
+['date','rateFrom','rateTo'].forEach(id=>$(id).value=today());
+function mode(){return document.querySelector('input[name="discount"]:checked').value}
+function num(id){let v=value(id);return v===''?null:Number(v)}
+function compute(price,subsidy,extra,upfront,months){let arr=[price,subsidy,extra,upfront];if(arr.some(x=>x===null||!Number.isSafeInteger(x)||x<0)||![0,24,36].includes(months))return {error:'금액 확인 필요'};let principal=price-subsidy-extra-upfront;if(principal<0)return {error:'지원금·선납금 합계 초과'};return {principal,monthly:months===0?null:principal/months}}
+function result(){return compute(num('price'),mode()==='select'?0:num('subsidy'),num('extra'),num('upfront'),Number(value('months')))}
+function recalc(){if(mode()==='select'){$('subsidy').value='0';$('subsidy').readOnly=true}else $('subsidy').readOnly=false;let r=result();$('principal').textContent=r.error||money(r.principal);$('monthly').textContent=r.error?'확인 필요':r.monthly===null?'일시불':money(Math.round(r.monthly));$('principal').className=r.error?'warning':'';if(mode()==='select')$('priceState').textContent='선택약정 · 지원금 0원';else $('priceState').textContent=matchedPrice&&matchedRate?'등록 기준표 적용':'직접 입력 / 미확인'}
+function lookup(){
+ matchedRate=null;matchedPrice=null;
+ let context=Object.fromEntries(contextIds.map(id=>[id,value(id)]));
+ let resolved=ReceptionPricing.resolve({prices,rates},context);
+ matchedPrice=resolved.price&&!resolved.price.conflict?resolved.price:null;
+ matchedRate=resolved.subsidy&&!resolved.subsidy.conflict?resolved.subsidy:null;
+ $('price').value=matchedPrice?matchedPrice.price:'';
+ $('subsidy').value=mode()==='select'?'0':matchedRate?matchedRate.subsidy:'';
+ let notes=[];
+ notes.push(matchedPrice?'출고가 자동 적용: '+matchedPrice.source+' ('+matchedPrice.from+' ~ '+matchedPrice.to+')':resolved.price?.conflict?'출고가 기준이 중복됩니다. 확인 필요':'모델·용량·통신사·접수일에 맞는 출고가 미등록');
+ notes.push(mode()==='select'?'선택약정: 통신사 지원금 0원':matchedRate?'지원금 자동 적용: '+matchedRate.source+' ('+matchedRate.from+' ~ '+matchedRate.to+')':resolved.subsidy?.conflict?'지원금 기준이 중복됩니다. 확인 필요':'해당 요금제·가입유형·약정·유통망의 지원금 미등록');
+ $('rateStatus').textContent=notes.join(' / ');$('rateStatus').className='status'+(matchedPrice&&(mode()==='select'||matchedRate)?' good':'');
+ document.querySelectorAll('[data-carrier]').forEach(b=>b.classList.toggle('active',b.dataset.carrier===value('carrier')));recalc();
+}
+['model','capacity'].forEach(id=>$(id).addEventListener('input',lookup));
+contextIds.forEach(id=>$(id).addEventListener('change',lookup));document.querySelectorAll('[name="discount"]').forEach(el=>el.addEventListener('change',lookup));document.querySelectorAll('[data-carrier]').forEach(b=>b.onclick=()=>{$('carrier').value=b.dataset.carrier;lookup()});['price','subsidy'].forEach(id=>$(id).addEventListener('input',()=>{matchedRate=null;matchedPrice=null;$('rateStatus').textContent='금액을 직접 수정했습니다. 최종 조건을 확인하세요.';$('rateStatus').className='status';recalc()}));['extra','upfront','months'].forEach(id=>$(id).addEventListener('input',recalc));
+function validRow(r){return ReceptionPricing.valid(r,'rate')}
+function message(t){$('resultMessage').textContent=t}
+function renderRates(){let host=$('records');host.replaceChildren();let p=document.createElement('p');p.textContent='등록된 기준 '+rates.length+'건';host.append(p);rates.forEach((r,i)=>{let line=document.createElement('p');line.textContent=[r.carrier,r.network,r.joinType,r.model,r.capacity,r.plan,r.contract+'개월',money(r.price),money(r.subsidy),r.from+'~'+r.to].join(' / ');let del=document.createElement('button');del.type='button';del.textContent='삭제';del.onclick=()=>{rates.splice(i,1);renderRates();lookup()};line.append(' ',del);host.append(line)})}
+$('addRate').onclick=()=>{if(mode()==='select'){message('지원금 기준표 등록은 통신사 지원금을 선택한 상태에서 해주세요.');return}let row={};['carrier','network','joinType','model','capacity','plan','contract'].forEach(k=>row[k]=value(k));Object.assign(row,{from:value('rateFrom'),to:value('rateTo'),source:value('rateSource'),price:num('price'),subsidy:num('subsidy')});if(!validRow(row)){message('모델·용량·요금제·적용기간·출처·출고가·지원금을 정확히 입력해주세요.');return}rates.push(row);renderRates();renderPrices();lookup();message('기준표를 등록했습니다. 다시 사용하려면 기준표 파일을 저장하세요.')};
+$('exportRates').onclick=()=>{let blob=new Blob([JSON.stringify({version:2,prices,rates},null,2)],{type:'application/json'});let a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='gomushin-subsidy-rates.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)};
+$('importRates').onchange=async e=>{let f=e.target.files[0];if(!f)return;if(f.size>3000000){message('기준표 파일은 3MB 이하로 준비해주세요.');return}try{let data=ReceptionPricing.decode(JSON.parse(await f.text()));rates=data.rates;prices=data.prices;renderRates();renderPrices();lookup();message('기준표를 가져왔습니다. 적용일에 맞는 최신 등록 금액이 자동 선택됩니다.')}catch{message('올바른 기준표 파일이 아닙니다. 기존 기준표는 유지됩니다.')}e.target.value=''};
+function renderPrices(){
+ let host=$('priceRecords');host.replaceChildren();
+ for(let [i,r] of prices.entries()){let p=document.createElement('p');p.textContent=[r.carrier,r.model,r.capacity,money(r.price),r.from+' ~ '+r.to,r.source].join(' / ');let b=document.createElement('button');b.type='button';b.textContent='삭제';b.onclick=()=>{prices.splice(i,1);renderPrices();lookup()};p.append(b);host.append(p)}
+ let list=$('models');list.replaceChildren();for(let name of [...new Set([...prices,...rates].map(r=>r.model))])list.append(new Option(name,name));
+}
+$('addPrice').onclick=()=>{
+ let row=Object.fromEntries(['carrier','model','capacity'].map(k=>[k,value(k)]));Object.assign(row,{from:value('rateFrom'),to:value('rateTo'),source:value('rateSource'),price:num('price')});
+ if(!ReceptionPricing.valid(row,'price')){message('통신사·모델·용량·출고가·적용기간·출처를 입력해주세요.');return}
+ prices.push(row);renderPrices();lookup();message('출고가를 등록했습니다. 요금제 선택 전에도 모델·용량만 맞으면 자동 입력됩니다.');
+};
+const sensitive=['rrnFront','rrnBack','account','payerBirth'];$('showSensitive').onchange=()=>sensitive.forEach(id=>$(id).type=$('showSensitive').checked?'text':'password');
+const personal=['name','rrnFront','rrnBack','contact','newPhone','email','oldCarrier','oldPhone','mvno','address','payer','relation','bank','account','payerBirth','cardCompany','paymentNote','memo'];$('clearCustomer').onclick=()=>{if(!confirm('입력한 고객정보를 비울까요?'))return;personal.forEach(id=>$(id).value='');$('showSensitive').checked=false;$('printSensitive').checked=false;sensitive.forEach(id=>$(id).type='password');$('printSheet').replaceChildren();message('고객정보를 비웠습니다.')};
+function cell(host,label,text,full=false){let el=document.createElement('div');el.className='pcell'+(full?' full':'');let b=document.createElement('b');b.textContent=label;el.append(b,document.createTextNode(text||' '));host.append(el)}
+function section(title,rows){let sec=document.createElement('section'),h=document.createElement('h2'),g=document.createElement('div');h.textContent=title;g.className='pgrid';rows.forEach(r=>cell(g,...r));sec.append(h,g);$('printSheet').append(sec)}
+function buildPrint(){let p=$('printSheet');p.replaceChildren();let h=document.createElement('h1');h.textContent=value('carrier')+' 이동전화 가입 접수서';p.append(h);let intro=document.createElement('p');intro.textContent='휴대폰성지 폰명장 고무신모바일 · 매장 접수용 / 통신사 공식 신청서 아님';intro.className='tiny';p.append(intro);let reveal=$('printSensitive').checked;let rrn=value('rrnFront')+(value('rrnBack')?'-'+(reveal?value('rrnBack'):'*******'):'');let acct=value('account');if(!reveal&&acct)acct='*'.repeat(Math.max(0,acct.length-4))+acct.slice(-4);let r=result();section('01  가입 및 고객 정보',[
+['가입 통신사 / 유형',value('carrier')+' / '+value('joinType')],['접수일 / 매장',value('date')+' / '+value('branch')],['유통망 / 개통처',value('network')],['담당자',value('staff')],['고객 이름',value('name')],['주민등록번호',rrn],['고객 연락처',value('contact')],['개통 휴대폰번호',value('newPhone')],['기존 통신사',value('oldCarrier')+(value('mvno')?' / '+value('mvno'):'')],['기존 휴대폰번호',value('oldPhone')],['주소',value('address'),true],['이메일',value('email'),true]]);
+section('02  단말 · 약정 · 구매 조건',[
+['모델 / 용량',value('model')+' / '+value('capacity')],['색상',value('color')],['요금제',value('plan')],['월 기본요금',value('monthlyFee')?money(value('monthlyFee')):'미기재'],['할인 방식',mode()==='select'?'선택약정 (통신사 지원금 0원)':'통신사 지원금'],['약정 / 할부',value('contract')+'개월 약정 / '+(value('months')==='0'?'일시불':value('months')+'개월 할부')],['출고가',value('price')?money(value('price')):'확인 필요'],['통신사 지원금',value('subsidy')!==''?money(value('subsidy')):'확인 필요'],['추가 / 유통망 지원금',money(value('extra'))],['선납금',money(value('upfront'))],['잔여 단말 원금',r.error||money(r.principal)],['월 할부원금',r.error?'확인 필요':r.monthly===null?'일시불':money(Math.round(r.monthly))+' (수수료 제외)'],['할부수수료 안내',value('interestNote'),true],['지원금 기준',matchedRate?matchedRate.source+' ('+matchedRate.from+'~'+matchedRate.to+')':'직접 입력 / 최종 기준 확인 필요',true]]);
+section('03  요금 납부 · 추가 조건',[
+['납부 방법',value('payment')],['납부자 / 관계',value('payer')+' / '+value('relation')],['은행명',value('bank')],['계좌번호',acct],['납부자 생년월일',reveal?value('payerBirth'):(value('payerBirth')?'********':'')],['카드사',value('cardCompany')],['납부 관련 메모',value('paymentNote'),true],['요금제 변경일',value('planDate')],['부가서비스 해지일',value('addonDate')],['유심 / eSIM 비용',value('simFee')?money(value('simFee')):'미기재'],['접수 확인일',value('date')],['부가서비스 / 안내',value('memo'),true]]);
+let sign=document.createElement('div');sign.className='sign';sign.textContent='기재 내용 확인: 고객 __________________ (서명)      담당자 __________________ (서명)';p.append(sign);let note=document.createElement('p');note.className='tiny';note.textContent='매장 접수용입니다. 실제 계약·개통·개인정보 동의·자동이체는 통신사 공식 서류에서 완료합니다. 월 할부원금은 수수료 제외 참고값이며 요금제 기본료와 별도입니다.';p.append(note)}
+$('print').onclick=()=>{let r=result();if(r.error&&!confirm('금액에 미확인 항목이 있습니다. 확인 필요 상태로 인쇄할까요?'))return;buildPrint();window.print()};window.addEventListener('beforeprint',buildPrint);$('application').onsubmit=e=>e.preventDefault();renderRates();renderPrices();recalc();
+
+const transferKey=crypto.randomUUID();
+$('transferSale').onclick=async()=>{
+ let r=result();if(r.error){message(r.error);return}
+ if(!value('name')||!value('model')||!value('plan')){message('고객명·모델·요금제를 입력해주세요.');return}
+ if(!confirm('T폼 개통을 완료하셨나요? 판매일보 화면에서 내용을 확인하고 저장해주세요. 주민번호와 자동이체 정보는 전달하지 않습니다.'))return;
+ let payload={csrf:{{csrf|tojson}},transfer_key:transferKey,customer_name:value('name'),customer_phone:value('newPhone')||value('oldPhone')||value('contact'),carrier:({'SKT':'SK','KT':'KT','LG U+':'LG'})[value('carrier')],opening_type:value('joinType')==='신규가입'?'신규':value('joinType'),opening_date:value('date'),device:value('model'),storage:value('capacity'),color:value('color'),current_plan:value('plan'),device_price:value('price'),official_subsidy:mode()==='select'?'0':value('subsidy'),additional_subsidy:value('extra'),extra_support:value('extra'),installment_months:value('months'),installment_price:String(r.principal),monthly_installment:String(Math.round(r.monthly||0)),contract_type:mode()==='select'?'선택약정':'통신사 지원금'};
+ $('transferSale').disabled=true;
+ try{let res=await fetch('/reception',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(!res.ok)throw Error();let data=await res.json();location.assign(data.url)}catch{message('판매일보 전송에 실패했습니다. 입력 내용은 유지됩니다. 로그인과 연결 상태를 확인한 뒤 다시 시도해주세요.');$('transferSale').disabled=false}
+};
+
+let catalogRevision=0,localCatalogDirty=false;
+['addPrice','addRate','importRates'].forEach(id=>$(id).addEventListener(id==='importRates'?'change':'click',()=>{localCatalogDirty=true}));
+['records','priceRecords'].forEach(id=>$(id).addEventListener('click',()=>{localCatalogDirty=true}));
+async function syncCatalog(force=false){
+ try{
+  let response=await fetch('/api/reception/catalog',{cache:'no-store'});if(!response.ok)throw Error();let body=await response.json();
+  if(body.revision===catalogRevision){$('syncStatus').textContent=body.revision?'등록 기준표 최신 상태 · '+body.updated_at:'공식 자동수집 미연결 · 등록된 기준표 없음';return}
+  if(localCatalogDirty&&!force){$('syncStatus').textContent='새 기준표가 있습니다. 편집한 기준표를 저장하거나 최신 기준표 확인을 눌러주세요.';return}
+  const data=ReceptionPricing.decode(body.catalog);prices=data.prices;rates=data.rates;catalogRevision=body.revision;localCatalogDirty=false;renderRates();renderPrices();lookup();
+  $('syncStatus').textContent='매장 등록 기준표 갱신 · '+body.updated_at+' · 공식 자동수집 미연결';
+ }catch{$('syncStatus').textContent='최신 기준표 확인 실패 · 현재 표시 금액의 출처와 적용일을 확인하세요.'}
+}
+$('refreshCatalog').onclick=()=>{if(!localCatalogDirty||confirm('편집 중인 기준표를 매장 공통 기준표로 바꿀까요?'))syncCatalog(true)};
+if($('publishCatalog'))$('publishCatalog').onclick=async()=>{
+ try{const catalog=ReceptionPricing.decode({version:2,prices,rates});let res=await fetch('/api/reception/catalog',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({csrf:{{csrf|tojson}},revision:catalogRevision,catalog})});if(res.status===409){message('다른 관리자가 기준표를 갱신했습니다. 최신 기준표를 확인해주세요.');return}if(!res.ok)throw Error();let body=await res.json();catalogRevision=body.revision;localCatalogDirty=false;$('syncStatus').textContent='전 직원 적용 완료 · '+body.updated_at;message('등록 기준표를 저장했습니다. 직원 화면에서 5분 이내 확인됩니다.');}catch{message('기준표 저장 실패. 금액·기간·출처와 연결 상태를 확인하세요.')}
+};
+syncCatalog();setInterval(()=>syncCatalog(),300000);
+let lastKoreaDay=today();setInterval(()=>{let day=today();if(day!==lastKoreaDay){if(value('date')===lastKoreaDay){$('date').value=day;lookup()}lastKoreaDay=day}},30000);
+</script></body></html>

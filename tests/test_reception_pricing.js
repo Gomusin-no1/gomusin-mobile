@@ -1,0 +1,18 @@
+const assert=require('node:assert/strict'),P=require('../static/js/reception-pricing.js');
+const row={carrier:'SKT',model:'갤럭시 S26',capacity:'256GB',price:1000000,from:'2026-09-01',to:'2026-10-31',source:'TEST ONLY',network:'',joinType:'번호이동',plan:'TEST',contract:'24',subsidy:300000};
+const c={...row,date:'2026-09-30'};
+const cat={version:2,prices:[row,{...row,price:1100000,from:'2026-10-01'}],rates:[row,{...row,subsidy:400000,from:'2026-10-01'}]};
+assert.equal(P.resolve(cat,c).price.price,1000000);
+assert.equal(P.resolve(cat,{...c,date:'2026-10-01'}).price.price,1100000);
+assert.equal(P.resolve(cat,{...c,date:'2026-10-01'}).subsidy.subsidy,400000);
+assert.equal(P.resolve(cat,{...c,plan:''}).price.price,1000000);
+assert.equal(P.resolve(cat,{...c,plan:''}).subsidy,null);
+assert.equal(P.resolve(cat,{...c,capacity:'256g',model:'갤럭시S26'}).price.price,1000000);
+assert.equal(P.resolve(cat,{...c,capacity:'512GB'}).price,null);
+assert.equal(P.resolve(cat,{...c,carrier:'KT'}).price,null);
+assert.equal(P.resolve(cat,{...c,date:'2026-11-01'}).price,null);
+assert.ok(P.resolve({...cat,prices:[row,{...row,price:123}]},c).price.conflict);
+assert.throws(()=>P.decode({...cat,prices:[{...row,from:'2026-02-30'}]}));
+assert.throws(()=>P.decode({...cat,rates:[{...row,subsidy:-1}]}));
+assert.ok(!('rrn' in P.decode({...cat,prices:[{...row,rrn:'secret'}]}).prices[0]));
+console.log('13 pricing checks passed');

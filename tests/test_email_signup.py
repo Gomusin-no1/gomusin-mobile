@@ -12,7 +12,7 @@ class EmailSignupTest(unittest.TestCase):
  login_as_a=fixtures.SignatureAndTenantTest.login_as_a
  def base(self, **changes):
   return dict({'company_code':'company-a','display_name':'메일직원','phone':'01055556666',
-   'username':'email-staff','password':'safe-password','email':'staff@example.com','csrf_token':'test-csrf'},**changes)
+   'username':'email-staff','password':'safe-password','email':'staff@example.com','birth6':'900123','csrf_token':'test-csrf'},**changes)
 
  def send(self, **changes):
   return self.client.post('/signup',data=self.base(action='send',**changes))
@@ -29,13 +29,13 @@ class EmailSignupTest(unittest.TestCase):
    user=User.query.filter_by(username='email-staff').one();uid=user.id
    request_id=AccountRequest.query.filter_by(username='email-staff').one().id
    self.assertEqual('staff@example.com',user.email);self.assertIsNotNone(user.email_verified_at)
-   self.assertIsNone(user.branch_id);self.assertFalse(user.active)
+   self.assertIsNone(user.branch_id);self.assertTrue(user.active);self.assertTrue(user.approval_pending)
   login={'company_code':'company-a','username':'email-staff','password':'safe-password'}
   self.client.post('/login',data=login)
-  self.assertEqual(302,self.client.get('/customers').status_code)
+  self.assertEqual(403,self.client.get('/customers').status_code)
   # An injected/stale session must not make a pending account accessible.
   with self.client.session_transaction() as sess:sess.update(user_id=uid,role='admin',company_code='company-a')
-  self.assertEqual(302,self.client.get('/customers').status_code)
+  self.assertEqual(403,self.client.get('/customers').status_code)
   self.login_as_a()
   with patch('app.send_email',return_value=True) as email,patch('app._send_sms') as sms:
    self.client.post(f'/account-requests/{request_id}/complete',data={'decision':'approve','branch_id':self.a_branch})

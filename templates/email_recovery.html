@@ -1,0 +1,12 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{'아이디 찾기' if purpose=='find_id' else '비밀번호 재설정'}} · TrustMap</title><link rel="stylesheet" href="{{url_for('static',filename='css/style.css')}}"></head><body class="auth-page"><main class="recovery-shell"><a class="recovery-brand" href="{{url_for('login')}}"><strong>TrustMap</strong></a><section class="recovery-card"><header><h1>{{'아이디 찾기' if purpose=='find_id' else '비밀번호 재설정'}}</h1><p>가입할 때 인증한 이메일로 인증번호를 받아주세요.</p></header>
+{% for cat,m in get_flashed_messages(with_categories=true) %}<div role="status" class="flash {{cat}}">{{m}}</div>{% endfor %}
+{% if found %}<p>회원님의 아이디는 <strong>{{found}}</strong>입니다.</p>{% elif reset_done %}<p>비밀번호를 변경했습니다. 새 비밀번호로 로그인해주세요.</p>{% else %}
+<form method="post" class="auth-form"><input type="hidden" name="csrf_token" value="{{session.recovery_csrf}}">
+<label>회사 아이디<input name="company_code" value="{{form.get('company_code','')}}" maxlength="50" required autocomplete="organization"></label>
+{% if purpose=='find_id' %}<label>이름<input name="display_name" value="{{form.get('display_name','')}}" maxlength="50" required autocomplete="name"></label>{% else %}<label>개인아이디<input name="username" value="{{form.get('username','')}}" maxlength="50" required autocomplete="username"></label>{% endif %}
+<label>가입 이메일<input name="email" value="{{form.get('email','')}}" type="email" maxlength="254" autocomplete="email" required></label>
+<button class="btn wide" name="action" value="send" type="submit" formnovalidate>이메일로 인증번호 받기</button>
+<label>이메일 인증번호<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required placeholder="6자리 인증번호"><small>10분 이내 입력 · 재발송은 1분 후 가능</small></label>
+{% if purpose!='find_id' %}<label>새 비밀번호<input name="new_password" type="password" minlength="8" maxlength="128" autocomplete="new-password" placeholder="8자 이상" required></label>{% endif %}
+<button class="btn primary wide" name="action" value="confirm" type="submit">{{'아이디 확인' if purpose=='find_id' else '비밀번호 변경'}}</button></form>{% endif %}
+<div class="recovery-foot"><a href="{{url_for('login')}}">로그인</a><a href="{{url_for('find_id')}}">아이디 찾기</a><a href="{{url_for('password_help')}}">비밀번호 재설정</a></div></section></main></body></html>
