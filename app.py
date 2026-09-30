@@ -65,6 +65,7 @@ def login_story():
  return {'image':f'images/login/hero-{index+1:02d}.webp','kicker':kicker,'title_a':title_a,'title_b':title_b,'body':body,'tags':tags}
 
 class User(db.Model):
+ birth6=db.Column(db.String(6)); approval_pending=db.Column(db.Boolean,default=False,nullable=False); auth_version=db.Column(db.Integer,default=0,nullable=False)
  email=db.Column(db.String(254)); email_verified_at=db.Column(db.DateTime)
  id=db.Column(db.Integer,primary_key=True); username=db.Column(db.String(50),nullable=False,index=True)
  password_hash=db.Column(db.String(255),nullable=False); role=db.Column(db.String(20),nullable=False,default='staff')
@@ -87,6 +88,7 @@ class PhoneVerification(db.Model):
  created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False,index=True)
 
 class EmailVerification(db.Model):
+ purpose=db.Column(db.String(30),default="signup",nullable=False); account=db.Column(db.String(50),default="",nullable=False); browser=db.Column(db.String(64),default="",nullable=False)
  id=db.Column(db.Integer,primary_key=True)
  company_code=db.Column(db.String(50),nullable=False,index=True)
  email=db.Column(db.String(254),nullable=False,index=True)
@@ -335,10 +337,11 @@ def verify_phone_code(purpose,company,phone,code):
  item.verified_at=now;db.session.commit();return True,''
 
 def email_code_hash(item,code):
- message=f'{item.id}:{item.company_code}:{item.email}:{code}'
+ message=f'{item.id}:{item.company_code}:{item.email}:{item.purpose}:{item.account}:{item.browser}:{code}'
  return hmac.new(app.config['SECRET_KEY'].encode(),message.encode(),hashlib.sha256).hexdigest()
 
-def issue_email_code(company,email):
+def issue_email_code(company,email,purpose="signup",account=""):
+ session.setdefault("email_browser",secrets.token_urlsafe(32))
  if not email_ready() and not app.config.get('TESTING'):
   return False,'인증메일 발송 준비 중입니다. 회사 관리자에게 문의해주세요.'
  now=datetime.utcnow()
@@ -350,16 +353,16 @@ def issue_email_code(company,email):
   return False,'인증메일 요청이 많습니다. 1시간 후 다시 시도해주세요.'
  EmailVerification.query.filter(EmailVerification.created_at<now-timedelta(days=2)).delete(synchronize_session=False)
  code=f'{secrets.randbelow(1000000):06d}'
- item=EmailVerification(company_code=company,email=email,ip_address=ip,code_hash='',expires_at=now+timedelta(minutes=10))
+ item=EmailVerification(purpose=purpose,account=account,browser=session['email_browser'],company_code=company,email=email,ip_address=ip,code_hash='',expires_at=now+timedelta(minutes=10))
  db.session.add(item);db.session.flush();item.code_hash=email_code_hash(item,code);db.session.commit()
- if not send_email(email,'[TrustMap] 직원 가입 이메일 인증번호',f'인증번호: {code}\n10분 안에 입력해주세요.\n가입 신청 후 대표님의 지점 지정과 승인이 필요합니다.\n요청하지 않았다면 이 메일을 무시해주세요.'):
+ if not send_email(email,'[TrustMap] 이메일 인증번호',f'인증번호: {code}\n10분 안에 입력해주세요.\n가입은 즉시 완료되며 업무 사용은 대표님의 지점·권한 지정 후 가능합니다.\n요청하지 않았다면 이 메일을 무시해주세요.'):
   return False,'인증메일을 보내지 못했습니다. 잠시 후 다시 시도하거나 회사 관리자에게 문의해주세요.'
  item.delivered=True;db.session.commit()
  return True,'인증번호를 이메일로 보냈습니다. 10분 안에 입력해주세요. 스팸함도 확인해주세요.'
 
-def verify_email_code(company,email,code):
+def verify_email_code(company,email,code,purpose="signup",account=""):
  now=datetime.utcnow()
- item=EmailVerification.query.filter_by(company_code=company,email=email,delivered=True).order_by(EmailVerification.id.desc()).first()
+ item=EmailVerification.query.filter_by(company_code=company,email=email,purpose=purpose,account=account,browser=session.get("email_browser",""),delivered=True).order_by(EmailVerification.id.desc()).first()
  if not item or item.verified_at or item.expires_at<=now:return False,'이메일 인증번호가 만료됐습니다. 다시 받아주세요.'
  if item.attempts>=5:return False,'입력 횟수를 초과했습니다. 새 인증번호를 받아주세요.'
  eligible=EmailVerification.query.filter_by(id=item.id,verified_at=None).filter(EmailVerification.attempts<5,EmailVerification.expires_at>now)
@@ -520,6 +523,9 @@ def login_required(fn):
   session_company=(session.get('company_code') or '').strip().lower()
   if not user or not user.active or not session_company or user.company_code.strip().lower()!=session_company:
    session.clear();flash('계정 상태가 변경되어 다시 로그인해주세요.','error');return redirect(url_for('login'))
+  if session.get('auth_version',0)!=(user.auth_version or 0):
+   session.clear();flash('비밀번호가 변경되었습니다. 다시 로그인해주세요.','error');return redirect(url_for('login'))
+  if user.approval_pending:return render_template('approval_pending.html'),(200 if request.endpoint=='dashboard' else 403)
   # Refresh authorization data on every request so role/branch changes apply immediately.
   session['username']=user.username
   session['display_name']=user.display_name or user.username
@@ -675,7 +681,7 @@ def seed_masters():
  db.session.commit()
 
 def prepare_database():
- db.create_all(); _add_columns('user',{'email':'VARCHAR(254)','email_verified_at':'TIMESTAMP'}); _add_columns('account_request',{'email':'VARCHAR(254)'}); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); _add_columns('sale_document',{'storage_backend':"VARCHAR(20) DEFAULT 'database'",'storage_path':'VARCHAR(500)','file_sha256':'VARCHAR(64)','is_encrypted':'BOOLEAN DEFAULT FALSE','sync_error':'VARCHAR(500)','nas_mirrored_at':'TIMESTAMP','nas_mirror_error':'VARCHAR(500)'}); upgrade_existing_sale()
+ db.create_all(); _add_columns('user',{'email':'VARCHAR(254)','email_verified_at':'TIMESTAMP','birth6':'VARCHAR(6)','approval_pending':'BOOLEAN DEFAULT FALSE','auth_version':'INTEGER DEFAULT 0'}); _add_columns('account_request',{'email':'VARCHAR(254)'}); _add_columns('user',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'recovery_phone':'VARCHAR(30)','can_approve_payback':'BOOLEAN DEFAULT FALSE'}); _add_columns('branch',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'"}); _add_columns('customer',{'company_code':"VARCHAR(50) DEFAULT 'trustflow'",'branch_id':'INTEGER','address_road':'VARCHAR(255)','address_jibun':'VARCHAR(255)','address_detail':'VARCHAR(255)','address_key':'VARCHAR(255)'}); _add_columns('payback',{'approval_status':"VARCHAR(20) DEFAULT '승인대기'",'approved_at':'TIMESTAMP','approved_by':'VARCHAR(50)','rejection_reason':'TEXT'}); _add_columns('wired_sale',{'business_type':"VARCHAR(30) DEFAULT '유선판매'"}); _add_columns('sale_document',{'storage_backend':"VARCHAR(20) DEFAULT 'database'",'storage_path':'VARCHAR(500)','file_sha256':'VARCHAR(64)','is_encrypted':'BOOLEAN DEFAULT FALSE','sync_error':'VARCHAR(500)','nas_mirrored_at':'TIMESTAMP','nas_mirror_error':'VARCHAR(500)'}); upgrade_existing_sale()
  if db.engine.dialect.name=='postgresql':
   try:
    names={x.get('name') for x in db.inspect(db.engine).get_unique_constraints('user')}
@@ -696,20 +702,20 @@ def ensure_email_schema():
  with _email_schema_lock:
   if _email_schema_ready:return
   db.create_all()
-  _add_columns('user',{'email':'VARCHAR(254)','email_verified_at':'TIMESTAMP'})
+  migrate_pending='approval_pending' not in {c['name'] for c in db.inspect(db.engine).get_columns('user')}
+  _add_columns('user',{'email':'VARCHAR(254)','email_verified_at':'TIMESTAMP','birth6':'VARCHAR(6)','approval_pending':'BOOLEAN DEFAULT FALSE','auth_version':'INTEGER DEFAULT 0'})
   _add_columns('account_request',{'email':'VARCHAR(254)'})
+  _add_columns('email_verification',{'purpose':"VARCHAR(30) DEFAULT 'signup'",'account':"VARCHAR(50) DEFAULT ''",'browser':"VARCHAR(64) DEFAULT ''"})
+  if migrate_pending:
+   db.session.execute(text("UPDATE \"user\" SET approval_pending=TRUE, active=TRUE WHERE active=FALSE AND EXISTS (SELECT 1 FROM account_request r WHERE r.company_code=\"user\".company_code AND r.username=\"user\".username AND r.request_type='회원가입' AND r.status='대기')"));db.session.commit()
   _email_schema_ready=True
 
 def sync_admin():
  prepare_database(); u=os.environ.get('ADMIN_USERNAME','').strip(); p=os.environ.get('ADMIN_PASSWORD',''); company_code=os.environ.get('COMPANY_LOGIN_ID','trustflow').strip().lower() or 'trustflow'
  if not u or not p:return
- user=User.query.filter_by(username=u).first()
- if not user:db.session.add(User(username=u,password_hash=generate_password_hash(p),role='admin',company_code=company_code));db.session.commit();return
- changed=False
- if not check_password_hash(user.password_hash,p):user.password_hash=generate_password_hash(p);changed=True
- if user.role!='admin':user.role='admin';changed=True
- if not user.company_code:user.company_code=company_code;changed=True
- if changed:db.session.commit()
+ # Bootstrap only: environment values must never overwrite a user's reset password.
+ user=User.query.filter_by(username=u,company_code=company_code).first()
+ if not user:db.session.add(User(username=u,password_hash=generate_password_hash(p),role='admin',company_code=company_code));db.session.commit()
 
 @app.context_processor
 def helpers():return dict(current_user=session.get('display_name') or session.get('username'),current_role=session.get('role'),current_company=session.get('company_code'),current_branch_id=current_branch_id(),can_approve_payback=can_approve_payback(),notification_summary=notification_summary(),moneyfmt=lambda v:f'{money(v):,}')
@@ -745,7 +751,7 @@ def login():
   if user and user.active is False:
    flash('비활성화된 직원 계정입니다. 관리자에게 문의해주세요.','error'); return render_template('login.html',story=login_story())
   if user and check_password_hash(user.password_hash,request.form.get('password','')):
-   db.session.add(LoginAttempt(company_code=company_code,username=username,ip_address=ip,succeeded=True));db.session.commit();session.clear();session.update(user_id=user.id,username=user.username,display_name=user.display_name or user.username,role=user.role,branch_id=user.branch_id,company_code=user.company_code);return redirect(url_for('dashboard'))
+   db.session.add(LoginAttempt(company_code=company_code,username=username,ip_address=ip,succeeded=True));db.session.commit();session.clear();session.update(auth_version=user.auth_version or 0,user_id=user.id,username=user.username,display_name=user.display_name or user.username,role=user.role,branch_id=user.branch_id,company_code=user.company_code);return redirect(url_for('dashboard'))
   db.session.add(LoginAttempt(company_code=company_code,username=username,ip_address=ip,succeeded=False));db.session.commit()
   flash('아이디 또는 비밀번호가 올바르지 않습니다.','error')
  return render_template('login.html',story=login_story())
@@ -755,10 +761,15 @@ def signup():
  prepare_database()
  session.setdefault('signup_csrf',secrets.token_urlsafe(32))
  if request.method=='POST':
-  if not secrets.compare_digest(session['signup_csrf'],request.form.get('csrf_token','')):abort(400)
+  if not secrets.compare_digest(session['signup_csrf'].encode(),request.form.get('csrf_token','').encode()):abort(400)
   company=request.form.get('company_code','').strip().lower()
   username=request.form.get('username','').strip();name=request.form.get('display_name','').strip()
   phone=normalize_phone(request.form.get('phone',''));email=normalize_email(request.form.get('email',''))
+  birth=request.form.get('birth6','').strip()
+  birth_valid=False
+  if len(birth)==6 and birth.isascii() and birth.isdigit():
+   try:datetime.strptime(birth,'%y%m%d');birth_valid=True
+   except ValueError:pass
   password=request.form.get('password','');action=request.form.get('action','register')
   company_exists=bool(company and len(company)<=50 and User.query.filter_by(company_code=company).first())
   if not company_exists:flash('등록되지 않은 회사 전체아이디입니다.','error')
@@ -769,56 +780,56 @@ def signup():
   elif action!='register':abort(400)
   elif not username or len(username)>50 or len(phone)!=11 or not phone.startswith('010'):
    flash('개인아이디와 휴대전화 번호(010부터 11자리)를 확인해주세요.','error')
-  elif len(password)<8:flash('개인 비밀번호는 8자 이상 입력해주세요.','error')
+  elif not birth_valid:flash('생년월일 6자리를 확인해주세요. 예: 900123','error')
+  elif not 8<=len(password)<=128:flash('개인 비밀번호는 8~128자로 입력해주세요.','error')
   elif User.query.filter_by(company_code=company,username=username).first():flash('이 회사에서 이미 사용 중인 개인아이디입니다.','error')
   else:
    ok,message=verify_email_code(company,email,request.form.get('code'))
    if not ok:flash(message,'error')
    else:
-    user=User(username=username,password_hash=generate_password_hash(password),role='staff',display_name=name,company_code=company,recovery_phone=phone,email=email,email_verified_at=datetime.utcnow(),active=False)
+    user=User(username=username,password_hash=generate_password_hash(password),role='staff',display_name=name,company_code=company,recovery_phone=phone,email=email,email_verified_at=datetime.utcnow(),birth6=birth,active=True,approval_pending=True)
     db.session.add(user);db.session.add(AccountRequest(request_type='회원가입',company_code=company,username=username,display_name=name,phone=phone,email=email,status='대기'))
     try:db.session.commit()
     except IntegrityError:
      db.session.rollback();flash('이미 사용 중인 아이디입니다. 다른 아이디로 다시 신청해주세요.','error')
     else:
-     session.pop('signup_csrf',None);flash('이메일 인증과 가입 신청이 완료됐습니다. 대표님의 지점 지정·승인 후 로그인할 수 있습니다.','success');return redirect(url_for('login'))
+     session.pop('signup_csrf',None);flash('가입이 완료됐습니다. 로그인 후 사용 승인 상태를 확인할 수 있습니다.','success');return redirect(url_for('login'))
  return render_template('signup.html',form=request.form,email_ready=email_ready() or app.config.get('TESTING'))
 
-@app.route('/find-id',methods=['GET','POST'])
-def find_id():
- prepare_database(); found=None; verification_sent=False
+def recover_account(purpose):
+ session.setdefault('recovery_csrf',secrets.token_urlsafe(32))
+ form=request.form;found=None;reset_done=False
  if request.method=='POST':
-  company=request.form.get('company_code','').strip().lower(); name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('phone','')); action=request.form.get('action','send')
-  user=User.query.filter_by(company_code=company,display_name=name,recovery_phone=phone).first()
-  if action=='send':
-   if user:
-    ok,message=issue_phone_code('find_id',company,phone); flash(message,'success' if ok else 'error'); verification_sent=ok or bool(PhoneVerification.query.filter_by(purpose='find_id',company_code=company,phone=phone).filter(PhoneVerification.expires_at>datetime.utcnow(),PhoneVerification.verified_at.is_(None)).first())
-   else:flash('입력한 정보와 일치하는 계정을 찾지 못했습니다.','error')
-  elif action=='verify' and user:
-   ok,message=verify_phone_code('find_id',company,phone,request.form.get('code'))
-   if ok:found=user.username
-   else:flash(message,'error');verification_sent=True
-  else:flash('입력한 정보와 일치하는 계정을 찾지 못했습니다.','error')
- return render_template('find_id.html',found=found,verification_sent=verification_sent,form=request.form)
+  if not secrets.compare_digest(session['recovery_csrf'].encode(),form.get('csrf_token','').encode()):abort(400)
+  company=form.get('company_code','').strip().lower();email=normalize_email(form.get('email',''))
+  username=form.get('username','').strip();name=form.get('display_name','').strip();action=form.get('action','send')
+  if action not in ('send','confirm'):abort(400)
+  q=User.query.filter_by(company_code=company,email=email).filter(User.email_verified_at.isnot(None))
+  matches=q.filter_by(display_name=name).all() if purpose=='find_id' else q.filter_by(username=username).all()
+  user=matches[0] if len(matches)==1 else None
+  account=name if purpose=='find_id' else username
+  if not email or not company or len(company)>50 or not account or len(account)>50:
+   flash('회사 아이디, 이름 또는 개인아이디, 가입 이메일을 확인해주세요.','error')
+  elif action=='send':
+   if matches:
+    ok,message=issue_email_code(company,email,purpose,account);flash(message,'success' if ok else 'error')
+   else:flash('일치하는 계정이 있으면 인증메일을 보냅니다. 가입 이메일을 확인해주세요.','success')
+  elif purpose=='password_reset' and not 8<=len(form.get('new_password',''))<=128:
+   flash('새 비밀번호는 8~128자로 입력해주세요.','error')
+  elif not matches or (purpose=='password_reset' and not user):flash('입력한 정보와 인증번호를 확인해주세요.','error')
+  else:
+   ok,message=verify_email_code(company,email,form.get('code',''),purpose,account)
+   if not ok:flash(message,'error')
+   elif purpose=='find_id':found=', '.join(u.username for u in matches);db.session.commit()
+   else:
+    user.password_hash=generate_password_hash(form['new_password']);user.auth_version=(user.auth_version or 0)+1;db.session.commit();reset_done=True
+ return render_template('email_recovery.html',purpose=purpose,form=form,found=found,reset_done=reset_done)
+
+@app.route('/find-id',methods=['GET','POST'])
+def find_id():return recover_account('find_id')
 
 @app.route('/password-help',methods=['GET','POST'])
-def password_help():
- prepare_database(); verification_sent=False; reset_done=False
- if request.method=='POST':
-  company=request.form.get('company_code','').strip().lower(); username=request.form.get('username','').strip(); name=request.form.get('display_name','').strip(); phone=normalize_phone(request.form.get('phone','')); action=request.form.get('action','send')
-  user=User.query.filter_by(company_code=company,username=username,display_name=name,recovery_phone=phone).first()
-  if action=='send':
-   if user:
-    ok,message=issue_phone_code('password_reset',company,phone);flash(message,'success' if ok else 'error');verification_sent=ok or bool(PhoneVerification.query.filter_by(purpose='password_reset',company_code=company,phone=phone).filter(PhoneVerification.expires_at>datetime.utcnow(),PhoneVerification.verified_at.is_(None)).first())
-   else:flash('입력한 정보와 일치하는 계정을 찾지 못했습니다.','error')
-  elif action=='reset' and user:
-   ok,message=verify_phone_code('password_reset',company,phone,request.form.get('code')); password=request.form.get('new_password','')
-   if not ok:flash(message,'error');verification_sent=True
-   elif len(password)<8:flash('새 비밀번호는 8자 이상 입력해주세요.','error');verification_sent=True
-   else:
-    user.password_hash=generate_password_hash(password);db.session.add(AccountRequest(request_type='비밀번호완료',company_code=company,username=username,display_name=name,phone=phone,status='완료'));db.session.commit();reset_done=True
-  else:flash('입력한 정보와 일치하는 계정을 찾지 못했습니다.','error')
- return render_template('password_help.html',verification_sent=verification_sent,reset_done=reset_done,form=request.form)
+def password_help():return recover_account('password_reset')
 
 @app.route('/logout')
 def logout():session.clear();return redirect(url_for('login'))
@@ -1874,7 +1885,7 @@ def staff_edit(uid):
    flash('직원명을 입력해주세요.','error'); return redirect(url_for('staff_edit',uid=uid))
   u.display_name=display_name; u.branch_id=request.form.get('branch_id') or None; u.role=request.form.get('role','staff'); u.recovery_phone=normalize_phone(request.form.get('recovery_phone','')); u.active=request.form.get('active')=='1';u.can_approve_payback=request.form.get('can_approve_payback')=='1'
   new_pw=request.form.get('password','')
-  if new_pw: u.password_hash=generate_password_hash(new_pw)
+  if new_pw: u.password_hash=generate_password_hash(new_pw);u.auth_version=(u.auth_version or 0)+1
   db.session.commit()
   if session.get('user_id')==u.id:
    session['display_name']=u.display_name; session['role']=u.role
@@ -1923,7 +1934,10 @@ def account_request_complete(request_id):
    except:flash('승인할 직원의 소속 지점을 선택해주세요.','error');return redirect(url_for('staff'))
    branch=Branch.query.filter_by(id=branch_id,company_code=item.company_code,active=True).first()
    if not branch:abort(403)
-   user.branch_id=branch.id;user.active=True;item.status='승인';message=f'{branch.name} 직원으로 가입을 승인했습니다.';sms_message=f'[TrustFlow] {user.display_name or user.username}님의 가입이 승인되었습니다. 회사 전체아이디와 개인아이디로 로그인해주세요.'
+   role=request.form.get('role','staff')
+   if role not in ('staff','admin'):abort(400)
+   user.role=role
+   user.branch_id=branch.id;user.active=True;user.approval_pending=False;item.status='승인';message=f'{branch.name} 직원의 업무 사용을 승인했습니다.';sms_message=f'[TrustFlow] {user.display_name or user.username}님의 업무 사용이 승인되었습니다. 회사 전체아이디와 개인아이디로 로그인해주세요.'
   elif decision=='reject':
    user.active=False;item.status='반려';message='직원 가입을 반려했습니다.';sms_message=f'[TrustFlow] {user.display_name or user.username}님의 가입 신청이 반려되었습니다. 회사 관리자에게 문의해주세요.'
   else:flash('승인 또는 반려를 선택해주세요.','error');return redirect(url_for('staff'))

@@ -2,7 +2,7 @@ import os
 import io
 import sys
 import unittest
-from datetime import date
+from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -28,7 +28,7 @@ class SignatureAndTenantTest(unittest.TestCase):
    b=Branch(name='B 본점',code='B99',company_code='company-b')
    db.session.add_all([a,a2,b]);db.session.flush()
    db.session.add_all([
-    User(username='admin-a',password_hash=generate_password_hash('old-password'),role='admin',display_name='A관리자',company_code='company-a',branch_id=a.id,recovery_phone='01011112222',active=True),
+    User(username='admin-a',password_hash=generate_password_hash('old-password'),role='admin',display_name='A관리자',company_code='company-a',branch_id=a.id,recovery_phone='01011112222',email='owner@example.com',email_verified_at=datetime.utcnow(),active=True),
     User(username='admin-b',password_hash='unused',role='admin',display_name='B관리자',company_code='company-b',branch_id=b.id,active=True),
     Customer(name='A 고객',phone='01011112222',company_code='company-a',branch_id=a.id),
     Customer(name='B 고객',phone='01033334444',company_code='company-b',branch_id=b.id)
@@ -126,24 +126,34 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.assertLess(body.index('name="company_code"'),body.index('name="username"'))
   self.assertLess(body.index('name="username"'),body.index('name="password"'))
 
- def test_find_id_requires_phone_code(self):
-  response=self.client.post('/find-id',data={'action':'send','company_code':'company-a','display_name':'A관리자','phone':'01011112222'})
-  self.assertIn('인증번호를 문자로 보냈습니다'.encode(),response.data)
-  response=self.client.post('/find-id',data={'action':'verify','company_code':'company-a','display_name':'A관리자','phone':'01011112222','code':'123456'})
-  self.assertIn(b'admin-a',response.data)
+ def auth_post(self,path,data):
+  self.client.get(path)
+  with self.client.session_transaction() as sess:token=sess['recovery_csrf']
+  return self.client.post(path,data={**data,'csrf_token':token})
 
- def test_password_can_reset_after_phone_code(self):
-  base={'company_code':'company-a','username':'admin-a','display_name':'A관리자','phone':'01011112222'}
-  self.client.post('/password-help',data={**base,'action':'send'})
-  response=self.client.post('/password-help',data={**base,'action':'reset','code':'123456','new_password':'new-password'})
-  self.assertIn('비밀번호 변경 완료'.encode(),response.data)
+ def test_find_id_requires_email_code(self):
+  base={'company_code':'company-a','display_name':'A관리자','email':'owner@example.com'}
+  with patch('app.send_email',return_value=True) as mail:
+   response=self.auth_post('/find-id',{**base,'action':'send'})
+   self.assertIn('인증번호를 이메일로 보냈습니다'.encode(),response.data)
+   response=self.auth_post('/find-id',{**base,'action':'confirm','code':'123456'})
+  self.assertIn(b'<strong>admin-a</strong>',response.data)
+
+ def test_password_can_reset_after_email_code(self):
+  base={'company_code':'company-a','username':'admin-a','email':'owner@example.com'}
+  with patch('app.send_email',return_value=True) as mail:
+   self.auth_post('/password-help',{**base,'action':'send'})
+   response=self.auth_post('/password-help',{**base,'action':'confirm','code':'123456','new_password':'new-password'})
+  self.assertIn('비밀번호를 변경했습니다'.encode(),response.data)
   with app.app_context():self.assertTrue(check_password_hash(User.query.filter_by(username='admin-a').first().password_hash,'new-password'))
 
  def test_password_reset_rejects_wrong_code(self):
-  base={'company_code':'company-a','username':'admin-a','display_name':'A관리자','phone':'01011112222'}
-  self.client.post('/password-help',data={**base,'action':'send'})
-  response=self.client.post('/password-help',data={**base,'action':'reset','code':'999999','new_password':'new-password'})
-  self.assertIn('인증번호가 올바르지 않습니다'.encode(),response.data)
+  base={'company_code':'company-a','username':'admin-a','email':'owner@example.com'}
+  with patch('app.send_email',return_value=True):
+   self.auth_post('/password-help',{**base,'action':'send'})
+   response=self.auth_post('/password-help',{**base,'action':'confirm','code':'invalid','new_password':'new-password'})
+  self.assertIn('이메일 인증번호가 올바르지 않습니다'.encode(),response.data)
+  with app.app_context():self.assertTrue(check_password_hash(User.query.filter_by(username='admin-a').first().password_hash,'old-password'))
 
  def test_sms_request_is_limited_per_phone_and_hour(self):
   with app.app_context():
@@ -152,14 +162,16 @@ class SignatureAndTenantTest(unittest.TestCase):
    ok,message=issue_phone_code('six','company-a','01011112222')
    self.assertFalse(ok);self.assertIn('1시간 후',message)
 
- def test_sms_resend_cooldown_keeps_code_input_visible(self):
-  base={'company_code':'company-a','display_name':'A관리자','phone':'010-1111-2222','action':'send'}
-  self.client.post('/find-id',data=base)
-  response=self.client.post('/find-id',data=base)
-  self.assertIn('1분 후 다시 요청'.encode(),response.data);self.assertIn('name="code"'.encode(),response.data)
+ def test_email_resend_cooldown_keeps_code_input_visible(self):
+  base={'company_code':'company-a','display_name':'A관리자','email':'owner@example.com','action':'send'}
+  with patch('app.send_email',return_value=True) as mail:
+   self.auth_post('/find-id',base)
+   response=self.auth_post('/find-id',base)
+   self.assertEqual(mail.call_count,1)
+  self.assertIn('1분 후'.encode(),response.data);self.assertIn('name="code"'.encode(),response.data)
 
  def test_signup_requires_email_verification_and_creates_approval_request(self):
-  base={'company_code':'company-a','display_name':'신입직원','phone':'010-5555-6666','username':'new-staff','password':'safe-password','email':'new@example.com','csrf_token':'test-csrf'}
+  base={'company_code':'company-a','display_name':'신입직원','phone':'010-5555-6666','username':'new-staff','password':'safe-password','email':'new@example.com','birth6':'900123','csrf_token':'test-csrf'}
   response=self.client.post('/signup',data={**base,'action':'register','code':'123456'})
   self.assertIn('인증번호가 만료'.encode(),response.data)
   with app.app_context():self.assertIsNone(User.query.filter_by(username='new-staff').first())
@@ -168,13 +180,13 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.assertEqual(302,response.status_code)
   with app.app_context():
    user=User.query.filter_by(company_code='company-a',username='new-staff').one();request_item=AccountRequest.query.filter_by(company_code='company-a',username='new-staff').one()
-   self.assertFalse(user.active);self.assertEqual('01055556666',user.recovery_phone);self.assertEqual(('회원가입','대기'),(request_item.request_type,request_item.status))
+   self.assertTrue(user.active);self.assertTrue(user.approval_pending);self.assertEqual('01055556666',user.recovery_phone);self.assertEqual(('회원가입','대기'),(request_item.request_type,request_item.status))
 
  def test_signup_flow_succeeds_twelve_consecutive_times(self):
   for index in range(12):
    with self.client.session_transaction() as sess:sess['signup_csrf']='test-csrf'
    phone=f'0107000{index:04d}'
-   base={'company_code':'company-a','display_name':f'반복직원{index}','phone':phone,'username':f'repeat-staff-{index}','password':'safe-password','email':f'repeat{index}@example.com','csrf_token':'test-csrf'}
+   base={'company_code':'company-a','display_name':f'반복직원{index}','phone':phone,'username':f'repeat-staff-{index}','password':'safe-password','email':f'repeat{index}@example.com','birth6':'900123','csrf_token':'test-csrf'}
    sent=self.client.post('/signup',data={**base,'action':'send'})
    self.assertEqual(200,sent.status_code,index)
    self.assertIn('인증번호를 이메일로 보냈습니다'.encode(),sent.data,index)
@@ -191,7 +203,7 @@ class SignatureAndTenantTest(unittest.TestCase):
   self.login_as_a()
   with patch('app._send_sms',return_value=True) as sms:
    response=self.client.post(f'/account-requests/{request_id}/complete',data={'decision':'approve','branch_id':self.a_branch},follow_redirects=False)
-   sms.assert_called_once();self.assertEqual('01055556666',sms.call_args.args[0]);self.assertIn('가입이 승인',sms.call_args.args[1])
+   sms.assert_called_once();self.assertEqual('01055556666',sms.call_args.args[0]);self.assertIn('업무 사용이 승인',sms.call_args.args[1])
   self.assertEqual(302,response.status_code)
   with app.app_context():
    approved=User.query.filter_by(company_code='company-a',username='pending-staff').one()
