@@ -1,6 +1,6 @@
 {% extends 'base.html' %}{% block page_title %}신규 개통 등록{% endblock %}{% block top_actions %}<span class="save-note">한 번 입력하면 나머지는 자동 반영</span>{% endblock %}{% block content %}
 <form method="post" id="saleForm" class="stack-lg">
-<section class="panel form-panel"><div class="section-head"><span>01</span><div><h2>고객 / 개통정보</h2><p>담당판매자는 직원 이름으로 표시됩니다.</p></div></div><div class="form-grid">
+{% if reception_id %}<input type="hidden" name="reception_id" value="{{reception_id}}"><input type="hidden" name="reception_csrf" value="{{reception_csrf}}"><section class="panel"><h2>접수서에서 불러온 판매</h2><p>고객·단말·요금제·추가지원금이 입력되었습니다. 개통지점과 정산 조건을 확인하고 저장하세요.</p><p>출고가 {{prefill.device_price}}원 / 통신사 지원금 {{prefill.official_subsidy}}원 / 추가지원금 {{prefill.additional_subsidy}}원 / 잔여 원금 {{prefill.installment_price}}원 / {{prefill.installment_months}}개월 / {{prefill.contract_type}}</p></section>{% endif %}<section class="panel form-panel"><div class="section-head"><span>01</span><div><h2>고객 / 개통정보</h2><p>담당판매자는 직원 이름으로 표시됩니다.</p></div></div><div class="form-grid">
 <label>개통일 *<input type="date" id="openingDate" name="opening_date" value="{{today}}" required></label><label>고객명 *<input name="customer_name" required></label><label>휴대폰번호<input name="customer_phone"></label><label>생년월일<input name="customer_birth"></label>
 <label>내방유형<select name="visit_source"><option></option><option>신규내방</option><option>기존고객</option><option>소개</option><option>온라인</option></select></label><label>통신사<select name="carrier" id="saleCarrier"><option></option><option>SK</option><option>KT</option><option>LG</option></select></label>
 <label>개통유형<select name="opening_type" id="openingType"><option>번호이동</option><option>기기변경</option><option>신규</option><option>유심단독</option></select></label>
@@ -19,5 +19,15 @@ const planMaster={{ plan_data|tojson }};
 const c=document.getElementById('saleCarrier'), cp=document.getElementById('currentPlan'), np=document.getElementById('nextPlan');
 function fillPlans(){const carrier=c?.value||''; if(!cp||!np)return; cp.innerHTML='<option value="">선택</option>';np.innerHTML='<option value="">변경 없음</option>';planMaster.filter(x=>x.carrier===carrier).forEach(x=>{[cp,np].forEach(s=>{const o=document.createElement('option');o.value=x.name;o.textContent=x.name;s.appendChild(o);});});}
 c?.addEventListener('change',fillPlans);fillPlans();
+const receptionPrefill={{ (prefill or {})|tojson }};
+window.addEventListener('DOMContentLoaded',()=>{
+ for(const [name,value] of Object.entries(receptionPrefill)){
+  const el=document.querySelector('#saleForm [name="'+name+'"]');if(!el)continue;
+  if(el.tagName==='SELECT'&&!Array.from(el.options).some(o=>o.value===value))el.add(new Option(value,value));
+  el.value=value;if(name==='carrier')fillPlans();
+ }
+ const plan=receptionPrefill.current_plan;if(plan){if(!Array.from(cp.options).some(o=>o.value===plan))cp.add(new Option(plan,plan));cp.value=plan}
+ document.getElementById('support').dispatchEvent(new Event('input',{bubbles:true}));
+});
 </script>
 {% endblock %}

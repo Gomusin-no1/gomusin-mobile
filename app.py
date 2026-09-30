@@ -1,4 +1,5 @@
 import os, calendar, io, secrets, json, hashlib, hmac, urllib.request, threading
+from reception_catalog import validate_catalog
 from email_delivery import normalize_email, email_ready, send_email
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, date, timedelta
@@ -121,6 +122,20 @@ class Partner(db.Model):
  id=db.Column(db.Integer,primary_key=True); name=db.Column(db.String(100),unique=True,nullable=False,index=True); category=db.Column(db.String(30)); contact_name=db.Column(db.String(50)); phone=db.Column(db.String(30)); settlement_cycle=db.Column(db.String(30)); default_tax_rate=db.Column(db.Float,default=0.133); active=db.Column(db.Boolean,default=True,nullable=False); memo=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
 class Inventory(db.Model):
  id=db.Column(db.Integer,primary_key=True); serial_number=db.Column(db.String(100),unique=True,nullable=False,index=True); partner_id=db.Column(db.Integer,db.ForeignKey('partner.id')); carrier=db.Column(db.String(30)); manufacturer=db.Column(db.String(50)); model=db.Column(db.String(100),nullable=False); capacity=db.Column(db.String(50)); color=db.Column(db.String(50)); received_date=db.Column(db.Date,default=date.today,nullable=False); purchase_price=db.Column(db.Integer,default=0); storage_location=db.Column(db.String(50)); branch_id=db.Column(db.Integer,db.ForeignKey('branch.id')); status=db.Column(db.String(30),default='보유중',nullable=False,index=True); sale_id=db.Column(db.Integer,index=True); memo=db.Column(db.Text); created_at=db.Column(db.DateTime,default=datetime.utcnow,nullable=False)
+class ReceptionCatalog(db.Model):
+ company_code=db.Column(db.String(100),primary_key=True)
+ revision=db.Column(db.Integer,nullable=False,default=1)
+ payload=db.Column(db.Text,nullable=False)
+ updated_at=db.Column(db.DateTime,nullable=False,default=datetime.utcnow)
+
+class ReceptionTransfer(db.Model):
+ id=db.Column(db.String(64),primary_key=True)
+ company_code=db.Column(db.String(100),nullable=False)
+ user_id=db.Column(db.Integer,nullable=False)
+ payload=db.Column(db.Text,nullable=False)
+ sale_id=db.Column(db.Integer,nullable=True)
+ created_at=db.Column(db.DateTime,default=datetime.utcnow)
+
 class Sale(db.Model):
  id=db.Column(db.Integer,primary_key=True)
  customer_name=db.Column(db.String(100),nullable=False); customer_phone=db.Column(db.String(30)); customer_birth=db.Column(db.String(20)); customer_gender=db.Column(db.String(10)); opening_date=db.Column(db.Date,default=date.today,nullable=False); carrier=db.Column(db.String(30)); opening_type=db.Column(db.String(30)); status=db.Column(db.String(30),default='개통완료',nullable=False); opening_number=db.Column(db.String(50)); manufacturer=db.Column(db.String(50)); device=db.Column(db.String(100)); color=db.Column(db.String(50)); storage=db.Column(db.String(50)); imei=db.Column(db.String(100)); serial_number=db.Column(db.String(100)); plan=db.Column(db.String(100)); contract_type=db.Column(db.String(50)); installment_months=db.Column(db.String(20)); selection_discount=db.Column(db.String(20)); device_price=db.Column(db.String(50)); official_subsidy=db.Column(db.String(50)); additional_subsidy=db.Column(db.String(50)); seller_subsidy=db.Column(db.String(50)); subsidy=db.Column(db.String(50)); installment_price=db.Column(db.String(50)); cash_price=db.Column(db.String(50)); monthly_installment=db.Column(db.String(50)); monthly_payment=db.Column(db.String(50)); settlement=db.Column(db.String(50)); margin=db.Column(db.String(50)); additional_services=db.Column(db.Text); service_period=db.Column(db.String(50)); gifts=db.Column(db.Text); gift_status=db.Column(db.String(30)); aftercare_status=db.Column(db.String(50)); old_device=db.Column(db.String(100)); old_device_return=db.Column(db.String(20)); trade_in_price=db.Column(db.String(50)); assigned_staff=db.Column(db.String(50)); created_by=db.Column(db.String(50)); memo=db.Column(db.Text)
@@ -1362,9 +1377,84 @@ def partner_delete(pid):
   flash('재고/판매 이력이 있는 거래처는 삭제할 수 없습니다. 비활성으로 변경해주세요.','error'); return redirect(url_for('partners'))
  db.session.delete(p); db.session.commit(); flash('거래처가 삭제되었습니다.','success'); return redirect(url_for('partners'))
 
+def reception_transfer(token):
+ row=db.session.get(ReceptionTransfer,token)
+ if not row or row.company_code!=current_company() or row.user_id!=session.get('user_id'):abort(404)
+ return row
+
+@app.route('/api/reception/catalog',methods=['GET','PUT'])
+@login_required
+def reception_catalog():
+ company=current_company()
+ row=db.session.get(ReceptionCatalog,company)
+ if request.method=='PUT':
+  if not is_admin():abort(403)
+  if request.content_length and request.content_length>3000000:abort(413)
+  data=request.get_json(silent=True) or {}
+  expected=session.get('reception_csrf')
+  if not expected or not secrets.compare_digest(expected.encode(),str(data.get('csrf','')).encode()):abort(400)
+  try:catalog=validate_catalog(data.get('catalog'))
+  except (ValueError,TypeError):abort(400)
+  revision=data.get('revision')
+  if type(revision) is not int or revision!=(row.revision if row else 0):abort(409)
+  payload=json.dumps(catalog,ensure_ascii=False);now=datetime.utcnow()
+  if row:
+   changed=ReceptionCatalog.query.filter_by(company_code=company,revision=revision).update(dict(payload=payload,revision=revision+1,updated_at=now),synchronize_session=False)
+   if not changed:db.session.rollback();abort(409)
+  else:db.session.add(ReceptionCatalog(company_code=company,payload=payload,revision=1,updated_at=now))
+  try:db.session.commit()
+  except IntegrityError:db.session.rollback();abort(409)
+  row=db.session.get(ReceptionCatalog,company)
+ response=jsonify(catalog=json.loads(row.payload) if row else {'version':2,'prices':[],'rates':[]},revision=row.revision if row else 0,updated_at=(row.updated_at.isoformat()+'Z') if row else None,official_sync=False)
+ response.headers['Cache-Control']='no-store'
+ return response
+
+@app.route('/reception',methods=['GET','POST'])
+@login_required
+def reception_new():
+ session.setdefault('reception_csrf',secrets.token_urlsafe(32))
+ if request.method=='POST':
+  data=request.get_json(silent=True) or {}
+  if not secrets.compare_digest(session['reception_csrf'].encode(),str(data.get('csrf','')).encode()):abort(400)
+  # Whitelist only sales fields. Never store resident numbers or payment accounts.
+  fields={'customer_name','customer_phone','carrier','opening_type','device','storage','color','current_plan','opening_date','device_price','official_subsidy','additional_subsidy','extra_support','installment_months','installment_price','monthly_installment','contract_type'}
+  payload={k:str(data.get(k,''))[:200] for k in fields}
+  if not payload['customer_name'] or not payload['device'] or not payload['current_plan']:abort(400)
+  if payload['carrier'] not in ['SK','KT','LG'] or payload['opening_type'] not in ['신규','번호이동','기기변경']:abort(400)
+  amounts=['device_price','official_subsidy','additional_subsidy','extra_support','installment_price','monthly_installment']
+  for k in amounts:
+   if not payload[k].isdigit() or not 0<=int(payload[k])<=100000000:abort(400)
+  if payload['extra_support']!=payload['additional_subsidy']:abort(400)
+  if payload['installment_months'] not in ['0','24','36']:abort(400)
+  if payload['contract_type'] not in ['선택약정','통신사 지원금']:abort(400)
+  if payload['contract_type']=='선택약정' and int(payload['official_subsidy']):abort(400)
+  if int(payload['official_subsidy'])+int(payload['additional_subsidy'])+int(payload['installment_price'])>int(payload['device_price']):abort(400)
+  if not parse_date(payload['opening_date']):abort(400)
+  token=str(data.get('transfer_key',''))
+  if len(token)!=36:abort(400)
+  old=db.session.get(ReceptionTransfer,token)
+  if old:
+   reception_transfer(token)
+  else:
+   db.session.add(ReceptionTransfer(id=token,company_code=current_company(),user_id=session['user_id'],payload=json.dumps(payload,ensure_ascii=False)))
+   try:db.session.commit()
+   except IntegrityError:
+    db.session.rollback();reception_transfer(token)
+  return jsonify(url=url_for('sale_new',reception_id=token))
+ response=app.make_response(render_template('reception.html',csrf=session['reception_csrf'],can_publish=is_admin()))
+ response.headers['Cache-Control']='no-store'
+ return response
+
 @app.route('/sales/new',methods=['GET','POST'])
 @login_required
 def sale_new():
+ transfer=None; prefill={}
+ token=request.values.get('reception_id','')
+ if token:
+  transfer=reception_transfer(token)
+  if transfer.sale_id:return redirect(url_for('sale_edit',sid=transfer.sale_id))
+  prefill=json.loads(transfer.payload)
+  if request.method=='POST' and not secrets.compare_digest(session.get('reception_csrf','').encode(),request.form.get('reception_csrf','').encode()):abort(400)
  prepare_database(); staff=(User.query.filter_by(active=True,branch_id=current_branch_id()).order_by(User.display_name).all() if not is_admin() else User.query.filter_by(active=True).order_by(User.display_name,User.username).all());partners=Partner.query.filter_by(active=True).order_by(Partner.name).all();branches=(Branch.query.filter_by(id=current_branch_id()).all() if not is_admin() else Branch.query.filter_by(active=True).order_by(Branch.id).all());plans=PlanMaster.query.filter_by(active=True).order_by(PlanMaster.carrier,PlanMaster.sort_order,PlanMaster.name).all(); plan_data=[{'carrier':p.carrier,'name':p.name} for p in plans]
  if request.method=='POST':
   name=request.form.get('customer_name','').strip(); opening=parse_date(request.form.get('opening_date')) or date.today()
@@ -1375,6 +1465,10 @@ def sale_new():
   try:sale_branch=int(sale_branch)
   except:abort(403)
   enforce_branch(sale_branch)
+  if transfer:
+   claimed=ReceptionTransfer.query.filter_by(id=token,sale_id=None).update({'sale_id':-1},synchronize_session=False)
+   if not claimed:
+    db.session.rollback();return redirect(url_for('sale_new',reception_id=token))
   if not customer:customer=Customer(name=name,phone=phone,carrier=request.form.get('carrier'),status='개통고객',company_code=session.get('company_code') or 'trustflow',branch_id=sale_branch);db.session.add(customer);db.session.flush()
   serial=request.form.get('serial_number','').strip(); inv=Inventory.query.filter_by(serial_number=serial).first() if serial else None
   if inv:
@@ -1385,7 +1479,11 @@ def sale_new():
   plan_due=opening+timedelta(days=183) if request.form.get('next_plan','').strip() else None
   internet_due=parse_date(request.form.get('internet_cancel_due_date'));payback_due=parse_date(request.form.get('payback_due_date'))
   sale=Sale(customer_name=name,customer_phone=phone,customer_birth=request.form.get('customer_birth'),opening_date=opening,carrier=request.form.get('carrier'),opening_type=opening_type,status='개통완료',manufacturer=(inv.manufacturer if inv else request.form.get('manufacturer')),device=(inv.model if inv else request.form.get('device')),color=(inv.color if inv else request.form.get('color')),storage=(inv.capacity if inv else request.form.get('storage')),serial_number=serial,plan=request.form.get('current_plan'),current_plan=request.form.get('current_plan'),next_plan=request.form.get('next_plan'),plan_change_due_date=plan_due,partner_id=(inv.partner_id if inv else (request.form.get('partner_id') or None)),inventory_id=(inv.id if inv else None),visit_source=request.form.get('visit_source'),branch_id=sale_branch,assigned_staff=request.form.get('assigned_staff') or session.get('display_name') or session.get('username'),created_by=session.get('display_name') or session.get('username'),rebate=rebate,verbal_extra=verbal,deduction=deduct,extra_support=support,settlement_amount_v2=settlement,tax_rate=.133,tax_amount=tax,customer_payback=payback,transfer_fee=transfer_fee,sim_payment_type=sim_type,sim_fee=7700,final_margin=margin,settlement=str(settlement),margin=str(margin),internet_carrier=request.form.get('internet_carrier'),internet_subscriber=request.form.get('internet_subscriber'),internet_install_date=parse_date(request.form.get('internet_install_date')),internet_cancel_due_date=internet_due,payback_due_date=payback_due,memo=request.form.get('memo'))
+  if transfer:
+   for field in ['device_price','official_subsidy','additional_subsidy','installment_months','installment_price','monthly_installment','contract_type']:
+    setattr(sale,field,prefill[field])
   db.session.add(sale);db.session.flush()
+  if transfer:transfer.sale_id=sale.id
   if inv:
    old_branch=inv.branch_id
    if old_branch!=sale_branch:
@@ -1404,7 +1502,7 @@ def sale_new():
    db.session.add(Payback(sale_id=sale.id,customer_id=customer.id,amount=payback,due_date=payback_due,status='처리예정',bank=request.form.get('bank'),account_number=request.form.get('account_number'),account_holder=request.form.get('account_holder'),memo=request.form.get('payback_memo')))
    if payback_due:db.session.add(CustomerTask(customer_id=customer.id,sale_id=sale.id,task_type='페이백 지급',title=f'{name} 페이백 지급',description=f'{payback:,}원',due_date=payback_due,assigned_staff=sale.assigned_staff,auto_created=True))
   db.session.commit();flash('개통 등록이 완료되었습니다. 재고·판매일보·고객약속·페이백이 자동 반영되었습니다.','success');return redirect(url_for('sales'))
- return render_template('sale_form.html',staff=staff,partners=partners,branches=branches,today=date.today().isoformat(),sale=None,plans=plans,plan_data=plan_data)
+ return render_template('sale_form.html',staff=staff,partners=partners,branches=branches,today=date.today().isoformat(),sale=None,plans=plans,plan_data=plan_data,prefill=prefill,reception_id=token,reception_csrf=session.get('reception_csrf',''))
 
 
 def _customer_for_sale(sale):
