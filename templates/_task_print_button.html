@@ -1,0 +1,1 @@
+{% if can_print_change_form(t) %}<a class="btn small" href="{{url_for('task_change_form',task_id=t.id)}}" target="_blank" rel="noopener" aria-label="{{t.title}} 서류 출력">서류 출력</a>{% endif %}
