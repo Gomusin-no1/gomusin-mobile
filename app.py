@@ -1,5 +1,8 @@
 import os, calendar, io, secrets, json, hashlib, hmac, urllib.request, threading
 from reception_catalog import validate_catalog
+from change_forms import (TEMPLATES as CARRIER_FORM_TEMPLATES, FormInputError,
+                          TemplateUnavailable, can_print_change_form,
+                          normalize_carrier, validate_form, render_change_form)
 from email_delivery import normalize_email, email_ready, send_email
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, date, timedelta
@@ -733,7 +736,7 @@ def sync_admin():
  if not user:db.session.add(User(username=u,password_hash=generate_password_hash(p),role='admin',company_code=company_code));db.session.commit()
 
 @app.context_processor
-def helpers():return dict(current_user=session.get('display_name') or session.get('username'),current_role=session.get('role'),current_company=session.get('company_code'),current_branch_id=current_branch_id(),can_approve_payback=can_approve_payback(),notification_summary=notification_summary(),moneyfmt=lambda v:f'{money(v):,}')
+def helpers():return dict(current_user=session.get('display_name') or session.get('username'),current_role=session.get('role'),current_company=session.get('company_code'),current_branch_id=current_branch_id(),can_approve_payback=can_approve_payback(),notification_summary=notification_summary(),moneyfmt=lambda v:f'{money(v):,}',can_print_change_form=can_print_change_form)
 
 @app.errorhandler(403)
 def forbidden_error(error):
@@ -1043,6 +1046,54 @@ def notifications():
  customer_ids=list({x.customer_id for x in legal_deadlines if x.customer_id}); customer_map={c.id:c for c in Customer.query.filter(Customer.id.in_(customer_ids or [0])).all()}
  account_requests=AccountRequest.query.filter_by(company_code=current_company(),status='대기').order_by(AccountRequest.created_at.asc()).limit(100).all() if is_admin() else []
  return render_template('notifications.html',today=today,overdue_tasks=overdue_tasks,today_tasks=today_tasks,due_paybacks=due_paybacks,pending_approvals=pending_approvals,account_requests=account_requests,legal_deadlines=legal_deadlines,sales_map=sales_map,customer_map=customer_map)
+
+@app.route('/tasks/<int:task_id>/change-form',methods=['GET','POST'])
+@login_required
+def task_change_form(task_id):
+ t=CustomerTask.query.get_or_404(task_id)
+ # CustomerTask and Sale do not have the automatic company query filter.
+ if not t.sale_id:abort(404)
+ sale=Sale.query.get_or_404(t.sale_id)
+ enforce_branch(sale.branch_id)
+ if not can_print_change_form(t):abort(404)
+ carrier=normalize_carrier(sale.carrier)
+ template=CARRIER_FORM_TEMPLATES.get(carrier)
+ change=sale.next_plan or ''
+ if t.task_type=='부가서비스 해지':
+  # Select only the service named by this task; never print every sale add-on.
+  matches=[a.name for a in SaleAddon.query.filter_by(sale_id=sale.id).all()
+           if (t.description or '')==a.name or (t.description or '').startswith(a.name+' · ')]
+  change=matches[0] if len(matches)==1 else ''
+ values=dict(name=sale.customer_name or '',birth=sale.customer_birth or '',
+             phone=sale.opening_number or sale.customer_phone or '',
+             current_plan=sale.current_plan or sale.plan or '',change=change)
+ session.setdefault('change_form_csrf',secrets.token_urlsafe(32))
+ if request.method=='POST':
+  if not secrets.compare_digest(session['change_form_csrf'].encode(),request.form.get('csrf_token','').encode()):abort(400)
+  values={key:request.form.get(key,'') for key in values}
+ error=None; status=200; pdf=None
+ try:
+  data=validate_form(sale.carrier,t.task_type,values,due_date=t.due_date)
+  if request.method=='POST' or request.args.get('review')!='1':pdf=render_change_form(data)
+ except FormInputError as exc:
+  error=str(exc);status=422
+ except TemplateUnavailable as exc:
+  app.logger.error('Carrier form unavailable for %s: %s',carrier,exc)
+  error='공식 서식을 준비하지 못했습니다. 관리자에게 서식 파일 확인을 요청해 주세요.';status=503
+ if pdf is not None:
+  audit('변경서식 PDF 생성','customer_task',t.id,
+        f'sale_id={sale.id}; carrier={carrier}; template={template["file"]}; version={template["version"]}; due_date={t.due_date}',
+        branch_id=sale.branch_id,commit=True)
+  response=send_file(pdf,mimetype='application/pdf',as_attachment=False,
+                     download_name=f'change-form-{t.id}.pdf',max_age=0)
+ else:
+  response=app.make_response((render_template('task_change_form.html',t=t,sale=sale,
+             values=values,carrier=carrier,template=template,error=error,
+             csrf_token=session['change_form_csrf']),status))
+ response.headers['Cache-Control']='private, no-store, max-age=0'
+ response.headers['Pragma']='no-cache'
+ response.headers['Referrer-Policy']='no-referrer'
+ return response
 
 @app.post('/tasks/<int:task_id>/status')
 @login_required

@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block page_title %}변경서식 출력{% endblock %}
+{% block content %}
+<section class="panel narrow">
+  <div class="panel-title"><div><h2>{{t.task_type}} · {{t.due_date}}</h2><span>{{carrier or sale.carrier}} 공식 서식에 입력할 정보입니다.</span></div></div>
+  {% if error %}<div class="flash error" role="alert">{{error}}</div>{% endif %}
+  {% if template %}
+  <form method="post" class="stack" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{csrf_token}}">
+    <label>고객명<input name="name" value="{{values.name}}" maxlength="100" required></label>
+    <label>생년월일<input name="birth" value="{{values.birth}}" placeholder="예: 19900102 또는 900102" inputmode="numeric" maxlength="10" required></label>
+    <label>변경할 회선번호<input name="phone" value="{{values.phone}}" type="tel" maxlength="20" required></label>
+    {% if t.task_type=='요금제 변경' %}
+    <label>현재 요금제<input name="current_plan" value="{{values.current_plan}}" maxlength="100"></label>
+    <label>변경할 요금제<input name="change" value="{{values.change}}" maxlength="100" required></label>
+    {% else %}
+    <input type="hidden" name="current_plan" value="{{values.current_plan}}">
+    <label>해지할 부가서비스<input name="change" value="{{values.change}}" maxlength="100" required></label>
+    {% endif %}
+    <p>수정한 정보는 이번 출력에만 적용됩니다. 변경 예정일은 고객약속 날짜를 사용하며, 서명과 동의는 고객 확인 후 작성해 주세요.</p>
+    <div class="action-row"><a class="btn" href="{{url_for('task_edit',task_id=t.id)}}">약속으로 돌아가기</a><button class="btn primary" type="submit">자동입력된 서류 열기 · 인쇄</button></div>
+    <small>PDF가 열리면 인쇄 버튼을 누르세요. 출력 후 실제 변경이 끝났을 때 업무를 완료 처리해 주세요.</small>
+  </form>
+  <p><a href="{{template.source}}" target="_blank" rel="noopener noreferrer">{{carrier}} 공식 {{template.title}}</a> · 서식 버전 {{template.version}}</p>
+  {% else %}
+  <a class="btn" href="{{url_for('sale_edit',sid=sale.id)}}">판매정보 확인</a>
+  {% endif %}
+</section>
+{% endblock %}

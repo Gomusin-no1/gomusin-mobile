@@ -1,0 +1,4 @@
+# Preserve the exact bytes used by the verified form coordinate maps.
+carrier_forms/originals/*.pdf binary
+carrier_forms/fonts/*.ttf binary
+carrier_forms/fonts/OFL.txt -whitespace
