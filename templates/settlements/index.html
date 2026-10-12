@@ -1,0 +1,15 @@
+{% extends 'settlements/layout.html' %}{% block page_title %}거래처 정산 대조{% endblock %}
+{% block top_actions %}{% if current_role=='admin' %}<a class="btn" href="{{url_for('settlement_backup')}}">정산 보존자료 ZIP</a>{% endif %}<a class="btn" href="{{url_for('watches')}}">워치 정산</a>{% endblock %}
+{% block settlement_content %}
+<section class="panel"><h2>받아야 할 금액과 정산서를 한 번에 비교하세요</h2><p>① 지점·거래처·개통월 선택 → ② 엑셀 업로드 → ③ 금액 열 확인 → ④ 자동 대조·추가 청구 관리</p><p class="muted">정산서 금액은 거래처가 기재한 금액입니다. 실제 은행 입금과는 구분됩니다. 거래처에 연결된 판매일보가 있어야 대조할 수 있습니다.</p>
+<form method="post" enctype="multipart/form-data" class="form-grid">
+<input type="hidden" name="csrf_token" value="{{token}}">
+<label>지점<select name="branch_id" required><option value="">지점 선택</option>{% for b in branches %}<option value="{{b.id}}">{{b.name}}</option>{% endfor %}</select></label>
+<label>거래처<select name="partner_id" required><option value="">거래처 선택</option>{% for p in partners %}<option value="{{p.id}}">{{p.name}}</option>{% endfor %}</select></label>
+<label>판매 대조월 (개통일 기준)<input type="month" name="month" value="{{today.strftime('%Y-%m')}}" required></label>
+<label>거래처 정산 엑셀 (.xls / .xlsx, 10MB)<input type="file" name="file" accept=".xls,.xlsx" required></label>
+<button class="btn primary" type="submit">엑셀 불러오기</button></form></section>
+<section class="panel"><h2>저장된 대조 내역</h2><div class="table-wrap"><table><thead><tr><th>개통월</th><th>지점 / 거래처</th><th>원본 파일</th><th>상태</th><th></th></tr></thead><tbody>
+{% for b in batches %}<tr><td>{{b.month}}</td><td>{{branch_map.get(b.branch_id,'')}} / {{partner_map.get(b.partner_id,'')}}</td><td>{{b.filename}}</td><td>{{b.state}}</td><td><a class="btn" href="{{url_for('settlement_detail',bid=b.id)}}">대조 열기</a></td></tr>{% else %}<tr><td colspan="5" class="empty">아직 업로드한 정산서가 없습니다.</td></tr>{% endfor %}
+</tbody></table></div><p class="muted">최근 200개 업로드를 표시합니다. 기존 정산서와 판매일보는 자동 수정하지 않습니다.</p></section>
+{% endblock %}

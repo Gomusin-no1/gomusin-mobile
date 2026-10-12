@@ -1,0 +1,3 @@
+{% extends 'base.html' %}
+{% block head %}<link rel="stylesheet" href="{{url_for('static',filename='css/settlements.css')}}">{% endblock %}
+{% block content %}<div class="settle-page">{% block settlement_content %}{% endblock %}</div>{% endblock %}

@@ -1687,6 +1687,8 @@ def document_delete(did):
 @admin_required
 def sale_delete(sid):
  s=Sale.query.get_or_404(sid);enforce_branch(s.branch_id)
+ if WatchSale.query.filter_by(sale_id=s.id).first() or SettlementLine.query.filter_by(sale_id=s.id).first():
+  flash('정산 대조 또는 워치 기록이 연결된 판매는 삭제할 수 없습니다. 기록을 보존하고 수정으로 처리하세요.','error');return redirect(url_for('sales'))
  inv=Inventory.query.filter_by(sale_id=s.id).first()
  if inv:
   old_status=inv.status; inv.status='보유중'; inv.sale_id=None
@@ -2007,6 +2009,8 @@ def staff_delete(uid):
  u=User.query.get_or_404(uid); enforce_user_company(u)
  if session.get('user_id')==u.id:
   flash('현재 로그인 중인 본인 계정은 삭제할 수 없습니다.','error'); return redirect(url_for('staff'))
+ if WatchSale.query.filter(or_(WatchSale.fee_staff_id==u.id,WatchSale.share_staff_id==u.id,WatchSale.created_by==u.id)).first() or SettlementBatch.query.filter_by(created_by=u.id).first():
+  flash('정산·워치 기록이 있는 직원은 삭제할 수 없습니다. 비활성화로 관리해주세요.','error');return redirect(url_for('staff'))
  staff_name=u.display_name or u.username
  has_sales=Sale.query.filter(or_(Sale.assigned_staff==staff_name,Sale.created_by==staff_name,Sale.assigned_staff==u.username,Sale.created_by==u.username)).count()>0
  has_tasks=CustomerTask.query.filter(or_(CustomerTask.assigned_staff==staff_name,CustomerTask.completed_by==staff_name,CustomerTask.assigned_staff==u.username,CustomerTask.completed_by==u.username)).count()>0
@@ -2083,3 +2087,8 @@ def admin_backup():
  sheet('법률업무',['ID','고객ID','지점','유형','금액','발생일','청구사유','증빙','지급기한','상태','담당자'],[(x.id,x.customer_id,branch_names.get(x.branch_id),x.case_type,x.claim_amount,x.incident_date,x.reason,x.evidence,x.demand_due_date,x.status,x.assigned_staff) for x in apply_branch_scope(LegalCase.query,LegalCase).order_by(LegalCase.id).all()])
  audit('관리자 전체백업 다운로드','system','backup',f'{date.today()} 운영데이터 7개 시트');db.session.commit();out=io.BytesIO();wb.save(out);out.seek(0)
  return send_file(out,as_attachment=True,download_name=f'TrustFlow_운영백업_{date.today()}.xlsx',mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+# Register additive settlement/watch tables and branch-scoped workflows.
+from settlement_module import register_settlement
+globals().update(register_settlement(app, db, globals()))
