@@ -1,0 +1,17 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{run.month}} 정산 대사 · 트러스트맵</title>
+<link rel="stylesheet" href="{{url_for('static',filename='css/settlement_v13.css')}}">
+<link rel="stylesheet" href="{{url_for('static',filename='css/settlement_v13_integration.css')}}">
+</head><body><main class="wrap">
+<nav class="v13-nav"><a href="{{url_for('v13_home')}}">← 정산 대사 목록</a><a href="{{url_for('dashboard')}}">트러스트맵</a></nav>
+<h1>정산 대사 <span class="version">v1.3 · {{run.month}}</span></h1>
+<p class="lead">판매일보와 거래처 정산서를 고객 건별로 맞춘 결과입니다. 고객을 누르면 무엇이 맞고 다른지, 예상 원인을 볼 수 있습니다.</p>
+<div class="tabs" id="tabs"></div><div class="cards" id="cards"></div>
+<div class="bar"><select id="fStore" aria-label="매장 필터"><option value="">전체 매장</option></select><input id="fq" aria-label="고객 검색" placeholder="고객 이름·판매자·번호 끝자리 검색"><span class="note">초록 = 일치 · 파랑 = 정산서가 더 줌 · 빨강 = 정산서가 덜 줌</span></div>
+<div class="table" id="table"></div><div class="section" id="extra"></div>
+<noscript><p class="upload-error">대조 결과를 보려면 브라우저에서 JavaScript를 켜 주세요. 아래 엑셀 다운로드도 사용할 수 있습니다.</p></noscript>
+<section class="section"><h3>결과 다운로드</h3><div class="export-links">
+{% for r in results %}<div><b>{{r.summary.vendor}}</b> <a href="{{url_for('v13_export',rid=run.id,code=r.summary.vendor_code,kind='xlsx')}}">엑셀 다운로드</a> <a href="{{url_for('v13_export',rid=run.id,code=r.summary.vendor_code,kind='json')}}">JSON 다운로드</a></div>{% endfor %}
+</div></section>
+<details class="section"><summary>대조에 사용한 원본 파일 {{sources|length}}개</summary><ul>{% for s in sources %}<li><a href="{{url_for('v13_source',rid=run.id,fid=s.id)}}">{{s.filename}}</a></li>{% endfor %}</ul></details>
+</main><script id="settlement-data" type="application/json">{{data|tojson}}</script><script src="{{url_for('static',filename='settlement_v13.js')}}" defer></script></body></html>

@@ -2092,3 +2092,5 @@ def admin_backup():
 # Register additive settlement/watch tables and branch-scoped workflows.
 from settlement_module import register_settlement
 globals().update(register_settlement(app, db, globals()))
+from settlement_v13_routes import register_settlement_v13
+globals().update(register_settlement_v13(app, db, globals()))

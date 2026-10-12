@@ -1,0 +1,19 @@
+{
+  "RULES.md": "ace650ac88c7412c23cf2b27b51fc611d8732005d9bc8c3a52d8f15280d3c2f6",
+  "run.py": "6852e9ecc9b3422d2b1081ec16548530215849e084e2738cc526a60303605d4f",
+  "README.md": "d18a35e5860d8a829221857fcbd9f39a54c3fce380214979468453a6aa536932",
+  "requirements.txt": "a882feee315a19b188ae47ab5a73d5f8b8659c43e88c322da508cfd98e5366f8",
+  "settlement/report.py": "bb164ddef6ef4a91bfe8e24169a53a0584791ce8e8cbf75515d844b496fb4a15",
+  "settlement/common.py": "adc2a93ebe95bc6c5dd2858db18e660ea63a4b62b3d0f9d5d8ebb6be7430bf31",
+  "settlement/sales.py": "56c49a4f911e195cbb01512fb39bd204aaff6eeabb5d796522667e737d20662b",
+  "settlement/__init__.py": "3ade2d5f1f25ac4e8ae91fb61549dc660c8e7b5408aa8c91b4165e8e4a0ef40a",
+  "settlement/analysis.py": "c1a1faed7c1d21a7cd6856814f50144dd257831a02c4947231cac02bca6352d5",
+  "settlement/engine.py": "e355dff5173b123f694a227e79bfd16592f06da28236c83a48e2e7e1c66acac7",
+  "settlement/io_excel.py": "9492215471d288731a8fb95bc5284a38a2d0fa10a1ea9bc664b3dcacdcca2fec",
+  "ui_prototype/settlement_screen_demo.html": "1a5c986e0598d8f0ca40e7e7e95e272fac7da8d6708dc6d4d709464a4eff1199",
+  "settlement/vendors/base.py": "9319680966d694a9a997c8ad2a7fca68643fd62fae6a5d1ce3b387090ab71969",
+  "settlement/vendors/juan_kt.py": "b4ec6c5c141e5df41851a09f00b01403471d9d46e07004476122997f072df492",
+  "settlement/vendors/naeway.py": "20ba72343118d5ad548763ae4be498b1197a661f6a09a6cbd35b0d9f35ffec2a",
+  "settlement/vendors/gyeonggi.py": "0576b3a0242c2fbb8b2caede97f32182cdee663b2d7dabe6a155c9fd04a2cb79",
+  "settlement/vendors/__init__.py": "7147c1fc91a52895201b9a956e6f77fe607c8900bd05e7ef2dc03641e99375a5"
+}
