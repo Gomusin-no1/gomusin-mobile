@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>정산 대사 v1.3 · 트러스트맵</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/settlement_v13.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/settlement_v13_integration.css') }}">
+</head><body><main class="wrap">
+<nav class="v13-nav"><a href="{{url_for('dashboard')}}">← 트러스트맵</a><a href="{{url_for('settlements')}}">기존 정산 기록</a><a href="{{url_for('watches')}}">워치 정산·지급</a></nav>
+<h1>정산 대사 <span class="version">v1.3</span></h1>
+<p class="lead">판매일보와 거래처 정산서를 고객 건별로 맞춥니다. 고객을 누르면 예상 원인과 항목별 대조를 볼 수 있습니다.</p>
+{% if error %}<div class="upload-error" role="alert">{{error}} 파일을 다시 선택한 뒤 대조해 주세요.</div>{% endif %}
+<form method="post" enctype="multipart/form-data" id="upload-form" class="upload-panel">
+<input type="hidden" name="csrf_token" value="{{session.settlement_v13_csrf}}">
+<div class="form-heading"><h2>파일 선택</h2><label>정산월 <input type="month" name="month" required value="{{selected_month}}"></label></div>
+<h3>1. 매장 판매일보</h3>
+<p class="lead">대조할 매장의 파일과 실제 지점을 선택하세요. 선택한 월 시트를 자동으로 읽습니다.</p>
+{% for store in stores %}{% set idx=loop.index0 %}
+<div class="upload-row"><label for="sales-{{idx}}">{{store}} 판매일보</label>
+<select name="branch_{{idx}}" aria-label="{{store}} 실제 지점"><option value="">실제 지점 선택</option>
+{% for b in branches %}<option value="{{b.id}}" {% if request.form.get('branch_'~idx)==b.id|string or (not request.form and ((idx==0 and ('본점' in b.name or '부평' in b.name)) or (idx==1 and ('간석' in b.name or '2호점' in b.name)) or (idx==2 and ('숭의' in b.name or '3호점' in b.name)))) %}selected{% endif %}>{{b.name}}</option>{% endfor %}
+</select><input id="sales-{{idx}}" type="file" name="sales_{{idx}}" accept=".xlsx,.xls"></div>
+{% endfor %}
+<h3>2. 거래처 정산서</h3><p class="lead">여러 거래처를 함께 대조할 수 있습니다. 주안은 계정별 파일을 함께 선택하세요.</p>
+{% for code, vendor in vendors.items() %}<div class="upload-row vendor-upload"><label for="vendor-{{code}}">{{vendor.name}}</label><input id="vendor-{{code}}" type="file" name="vendor_{{code}}" accept=".xlsx,.xls" multiple></div>{% endfor %}
+<p class="lead">파일당 최대 10MB · 합계 최대 40MB. 업로드 원본과 대조 결과는 회사 관리자에게만 공개됩니다.</p>
+<button class="primary" type="submit" id="compare-button">정산 대조하기</button><span id="upload-status" role="status"></span>
+</form>
+<section class="section"><h3>저장된 대조 결과</h3><div class="scroll"><table class="mini"><thead><tr><th>정산월</th><th>등록일</th><th>결과</th></tr></thead><tbody>
+{% for run in history %}<tr><td>{{run.month}}</td><td>{{created_kst[run.id]}}</td><td><a href="{{url_for('v13_result',rid=run.id)}}">대조 결과 열기 #{{run.id}}</a></td></tr>
+{% else %}<tr><td colspan="3">저장된 대조 결과가 없습니다.</td></tr>{% endfor %}
+</tbody></table></div></section>
+</main><script src="{{url_for('static',filename='settlement_v13_upload.js')}}" defer></script></body></html>
